@@ -1,13 +1,16 @@
-/**
+/*
  * EmarkNews — 업그레이드 백엔드 (hybrid 기준 + 장점 통합: v3 Translate, YouTube, optional safe scraping, urgency/buzz with x_semantic_search, /translate_page with browse_page, gzip)
  */
 
 "use strict";
 
+// Load environment variables
+require('dotenv').config();
+
 const express = require("express");
 const path = require("path");
 const crypto = require("crypto");
-const OpenAI = require("openai");
+const OpenAI = require("openai");;
 const { TranslationServiceClient } = require("@google-cloud/translate").v3;
 const redis = require("redis");
 const NewsAPI = require("newsapi");
@@ -23,8 +26,13 @@ const app = express();
 app.use(express.json());
 app.use(expressGzip()); // Gzip for speed
 
-// Static files serving
-app.use(express.static(path.join(__dirname, 'public')));
+// 정적 파일 루트: ./public (캐시 헤더 포함)
+const PUBLIC_DIR = path.join(__dirname, 'public');
+app.use(express.static(PUBLIC_DIR, { 
+  maxAge: '1h', 
+  etag: true, 
+  lastModified: true 
+}));
 
 /* 환경 변수 */
 const {
@@ -598,9 +606,14 @@ async function safeFetchArticleContent(url) {
   }
 }
 
-// Root route to serve the frontend
+// 루트 페이지: public/index_gemini_grok_final.html
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index_gemini_grok_final.html'));
+  res.sendFile(path.join(PUBLIC_DIR, 'index_gemini_grok_final.html'));
+});
+
+// 프론트엔드 라우팅: 비-API GET 요청은 전부 index로 포워딩
+app.get(/^(?!\/(api|feed|healthz?)\/?).*$/, (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'index_gemini_grok_final.html'));
 });
 
 app.get("/feed", async (req, res) => {
@@ -689,6 +702,12 @@ app.get("/healthz", (_req, res) => {
     cache:{ policy:"public, max-age=60, stale-while-revalidate=300", etagEnabled:true },
     version:"1.0.0"
   });
+});
+
+// 에러 핸들링 미들웨어
+app.use((err, req, res, next) => {
+  console.error('Server error:', err.message);
+  res.status(500).json({ ok: false, error: 'internal_error' });
 });
 
 if (require.main === module) {

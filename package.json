@@ -7,15 +7,16 @@
     "start": "node backend_upgraded_hybrid_final2.js"
   },
   "dependencies": {
+    "@google-cloud/translate": "^8.0.0",
     "axios": "^1.7.2",
     "cheerio": "^1.0.0-rc.12",
     "compression": "^1.7.4",
     "crypto": "^1.0.1",
+    "dotenv": "^17.2.1",
     "express": "^4.18.2",
     "mathjs": "^12.1.0",
     "newsapi": "^2.4.1",
     "openai": "^4.0.0",
-    "@google-cloud/translate": "^8.0.0",
     "redis": "^4.6.7",
     "rss-parser": "^3.13.0",
     "twitter-api-v2": "^1.15.0"
