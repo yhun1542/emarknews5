@@ -28,6 +28,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 /* 환경 변수 */
 const {
+  NEWS_API_KEY = "",
   NEWS_API_KEYS = "",
   TWITTER_BEARER_TOKEN = "",
   OPENAI_API_KEY = "",
@@ -41,11 +42,43 @@ const {
   NODE_ENV = "development"
 } = process.env;
 
+// NewsAPI 초기화 - 환경 변수 우선순위: NEWS_API_KEY > NEWS_API_KEYS
+let newsApiKey = NEWS_API_KEY;
+if (!newsApiKey && NEWS_API_KEYS) {
+  newsApiKey = NEWS_API_KEYS.split(",")[0];
+}
+
+if (!newsApiKey) {
+  console.error("❌ NewsAPI key not found. Please set NEWS_API_KEY or NEWS_API_KEYS environment variable.");
+  process.exit(1);
+}
+
+// GOOGLE_APPLICATION_CREDENTIALS JSON 처리
+const fs = require('fs');
+let googleCredentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+  const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (gac.trim().startsWith('{')) {
+    // JSON 형태인 경우 파일로 저장
+    const credentialsPath = path.join(__dirname, 'gcloud_sa.json');
+    try {
+      fs.writeFileSync(credentialsPath, gac);
+      googleCredentialsPath = credentialsPath;
+      console.log('✅ Google credentials JSON saved to file');
+    } catch (error) {
+      console.error('❌ Failed to save Google credentials:', error.message);
+    }
+  }
+}
+
 // 초기화
-const newsapi = new NewsAPI(NEWS_API_KEYS.split(",")[0]);
+const newsapi = new NewsAPI(newsApiKey);
 const twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN);
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
-const translateClient = new TranslationServiceClient({ keyFilename: TRANSLATE_API_KEY });
+const translateClient = googleCredentialsPath ? 
+  new TranslationServiceClient({ keyFilename: googleCredentialsPath }) : 
+  null;
 const redisClient = redis.createClient({ url: REDIS_URL });
 redisClient.connect().catch(console.error);
 const rssParser = new Parser();
@@ -492,11 +525,22 @@ async function fetchArticlesForSection(section, freshness, domainCap, lang) {
     }
   } else {
     try {
+      // NewsAPI 호출 전 키 유효성 재확인
+      if (!newsApiKey) {
+        throw new Error('NewsAPI key is not configured');
+      }
+
       const newsResponse = await newsapi.v2.topHeadlines({
         category: section === 'general' ? undefined : section,
         language: 'en',
         pageSize: 20
       });
+
+      // API 응답 검증
+      if (!newsResponse || !newsResponse.articles) {
+        throw new Error('Invalid NewsAPI response structure');
+      }
+
       items = newsResponse.articles.map(article => ({
         title: article.title,
         url: article.url,
@@ -505,8 +549,23 @@ async function fetchArticlesForSection(section, freshness, domainCap, lang) {
         content: article.content,
         source: getDomain(article.url)
       }));
+
+      console.log(`✅ NewsAPI: Retrieved ${items.length} articles for section ${section}`);
+      
     } catch (e) {
-      console.error(`NewsAPI error for section ${section}:`, e);
+      console.error(`❌ NewsAPI error for section ${section}:`, e.message);
+      
+      // 특정 에러 타입에 대한 상세 처리
+      if (e.message && e.message.includes('apiKey')) {
+        console.error('🔑 API Key issue detected. Please verify NEWS_API_KEY environment variable.');
+      } else if (e.message && e.message.includes('rate limit')) {
+        console.error('⚠️ Rate limit exceeded. Consider implementing request throttling.');
+      } else if (e.message && e.message.includes('network')) {
+        console.error('🌐 Network connectivity issue detected.');
+      }
+      
+      // 빈 배열 반환으로 앱 크래시 방지
+      items = [];
     }
   }
 
