@@ -423,7 +423,7 @@ async function clusterArticles(articles, lang, quality = "low") {
 }
 
 async function translateText(text, targetLang = "ko") {
-  if (!text || targetLang === "en" || !translateClient || !GOOGLE_PROJECT_ID) return text;
+  if (!text || typeof text !== 'string' || text.trim() === '' || targetLang === "en" || !translateClient || !GOOGLE_PROJECT_ID) { return text; }
   const request = {
     parent: `projects/${GOOGLE_PROJECT_ID}/locations/global`,
     contents: [text],
@@ -558,7 +558,7 @@ async function fetchArticlesForSection(section, freshness, domainCap, lang) {
   const minTs = NOW() - freshness * HOUR;
   if (section === "world") {
     const rssUrls = [
-      'https://feeds.reuters.com/reuters/topNews',
+      'https://rss.nytimes.com/services/xml/rss/nyt/World.xml',
       'https://feeds.bbci.co.uk/news/rss.xml',
       'https://nypost.com/feed/',
       'https://www.cnbc.com/id/100003114/device/rss/rss.html'

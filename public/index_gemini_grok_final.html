@@ -989,6 +989,15 @@
 
     <script>
         const BASE_URL = location.origin; // Railway 배포 환경에서 동적으로 설정
+        
+        function getDomain(url) {
+            try {
+                return new URL(url).hostname.replace(/^www\./, "");
+            } catch {
+                return url; // URL 파싱 실패 시 원본 URL 반환
+            }
+        }
+        
         let currentSection = 'world';
         let lang = 'ko';
         let quality = 'low';
