@@ -834,7 +834,7 @@ async function fetchArticlesForSection(section, freshness, domainCap, lang) {
 
       // 보조: 주요 외신 RSS (BBC, Reuters 등)
       const worldRss = [
-        "http://feeds.reuters.com/reuters/topNews",
+        "https://rss.cnn.com/rss/edition.rss",
         "https://feeds.bbci.co.uk/news/world/rss.xml",
         "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
       ];

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EmarkNews - 뉴스 포털</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .news-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .news-item { border: 1px solid #ddd; padding: 15px; border-radius: 5px; }
+        .loading { text-align: center; padding: 50px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>EmarkNews</h1>
+            <p>최신 뉴스를 한눈에</p>
+        </div>
+        <div id="news-container" class="loading">
+            <p>뉴스를 불러오는 중...</p>
+        </div>
+    </div>
+    
+    <script>
+        // API에서 뉴스 데이터 가져오기
+        fetch('/api/news')
+            .then(response => response.json())
+            .then(data => {
+                const container = document.getElementById('news-container');
+                container.className = 'news-grid';
+                container.innerHTML = '';
+                
+                if (data && data.length > 0) {
+                    data.forEach(article => {
+                        const item = document.createElement('div');
+                        item.className = 'news-item';
+                        item.innerHTML = `
+                            <h3>${article.title || '제목 없음'}</h3>
+                            <p>${article.description || '설명 없음'}</p>
+                            <small>${article.publishedAt || '날짜 없음'}</small>
+                        `;
+                        container.appendChild(item);
+                    });
+                } else {
+                    container.innerHTML = '<p>뉴스를 불러올 수 없습니다.</p>';
+                }
+            })
+            .catch(error => {
+                console.error('뉴스 로딩 오류:', error);
+                document.getElementById('news-container').innerHTML = '<p>뉴스 로딩 중 오류가 발생했습니다.</p>';
+            });
+    </script>
+</body>
+</html>
