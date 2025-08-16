@@ -26,6 +26,30 @@ const app = express();
 app.use(express.json());
 app.use(expressGzip()); // Gzip for speed
 
+// 진단 엔드포인트 (정적 파일 서빙 전에 정의)
+app.get('/_diag/keys', (req, res) => {
+  const keys = {
+    NEWS_API_KEY: !!process.env.NEWS_API_KEY,
+    GNEWS_API_KEY: !!process.env.GNEWS_API_KEY,
+    OPENAI_API_KEY: !!process.env.OPENAI_API_KEY,
+    GOOGLE_APPLICATION_CREDENTIALS: !!process.env.GOOGLE_APPLICATION_CREDENTIALS,
+    TWITTER_BEARER_TOKEN: !!process.env.TWITTER_BEARER_TOKEN,
+    REDIS_URL: !!process.env.REDIS_URL,
+    NAVER_CLIENT_ID: !!process.env.NAVER_CLIENT_ID,
+    NAVER_CLIENT_SECRET: !!process.env.NAVER_CLIENT_SECRET
+  };
+  res.json({ status: 'ok', keys, timestamp: new Date().toISOString() });
+});
+
+app.get('/_diag/redis', (req, res) => {
+  const redisStatus = {
+    enabled: !process.env.DISABLE_CACHE,
+    url: !!process.env.REDIS_URL,
+    connected: false // Redis 연결 상태는 실제 연결 후 업데이트
+  };
+  res.json({ status: 'ok', redis: redisStatus, timestamp: new Date().toISOString() });
+});
+
 // 정적 파일 루트: ./public (캐시 헤더 포함)
 const PUBLIC_DIR = path.join(__dirname, 'public');
 app.use(express.static(PUBLIC_DIR, { 
