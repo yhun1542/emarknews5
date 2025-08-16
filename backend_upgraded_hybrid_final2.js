@@ -19,6 +19,11 @@ const Parser = require("rss-parser");
 const rssParser = new Parser({
   timeout: 10000,
   headers: {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  }
+});
+  timeout: 10000,
+  headers: {
     'User-Agent': 'EmarkNewsBot/1.0 (+https://emarknews.com)',
   }
 });
@@ -98,6 +103,7 @@ const fs = require('fs');
 let googleCredentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
   const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
+    gac = gac.replace(/\\n/g, "\n");
   let credentialsPath;
   if (gac.startsWith('{')) {
     // JSON 형식 (기존 처리)
@@ -144,7 +150,7 @@ try {
 const translateClient = new TranslationServiceClient(translateClientOptions);
 // Redis 연결 (선택적, 캐시 비활성화 가능)
 let redisClient = null;
-const CACHE_DISABLED = process.env.DISABLE_CACHE === '1' || process.env.DISABLE_CACHE === 'true';
+const CACHE_DISABLED = false;
 
 if (!CACHE_DISABLED) {
   try {
@@ -566,12 +572,15 @@ async function fetchArticlesForSection(section, freshness, domainCap, lang) {
   let items = [];
   const minTs = NOW() - freshness * HOUR;
   if (section === "world") {
-    const rssUrls = [
-      'https://rss.nytimes.com/services/xml/rss/nyt/World.xml',
-      'https://feeds.bbci.co.uk/news/rss.xml',
-      'https://nypost.com/feed/',
-      'https://www.cnbc.com/id/100003114/device/rss/rss.html'
-    ];
+const rssUrls = [
+  "https://feeds.bbci.co.uk/news/rss.xml",
+  "https://apnews.com/rss",
+  "https://www.ft.com/rss/home",
+  "http://rss.asahi.com/rss/asahi/newsheadlines.rdf",
+  "http://www3.nhk.or.jp/rss/news/cat0.xml",
+  "https://soranews24.com/feed/",
+  "https://www.japantimes.co.jp/feed/"
+];
     for (const url of rssUrls) {
       try {
         const feed = await rssParser.parseURL(url);
