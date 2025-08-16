@@ -700,57 +700,61 @@ app.get(/^(?!\/(api|feed|healthz?)\/?).*$/, (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'index_gemini_grok_final.html'));
 });
 
-app.get("/feed", async (req, res) => {
+app.get("/feed", cacheControl, async (req, res) => {
   try {
-    const {
-      section = "general",
-      lang = "ko",
-      freshness = 24,
-      domainCap = 3,
-      quality = "low",
-      aiSummary = "false",
-      postEdit = "false",
-      peModel,
-      peStrategy = "auto"
-    } = req.query;
+    const section = (req.query.section || "world").toString();
+    const freshness = parseInt(req.query.freshness ?? "72", 10);
+    const domainCap = parseInt(req.query.domain_cap ?? "5", 10);
+    const lang = (req.query.lang || "ko").toString();
+    const quality = (req.query.quality || "low").toString();
 
-    const articles = await fetchArticlesForSection(section, +freshness, +domainCap, lang);
-    if (!articles.length) {
-      return res.json({ clusters: [], meta: { section, lang, freshness: +freshness, domainCap: +domainCap, quality, totalArticles: 0 } });
-    }
-
-    const processedArticles = await processArticles(articles, lang, {
-      aiSummary: aiSummary === "true",
-      postEdit: postEdit === "true",
-      peModel,
-      peStrategy
-    });
-
-    const enrichedArticles = await computeUrgencyBuzz(processedArticles);
-    const clusters = await clusterArticles(enrichedArticles, lang, quality);
-
-    const etag = generateETag({ clusters, meta: { section, lang, freshness: +freshness, domainCap: +domainCap, quality } });
-    res.set("ETag", etag);
-    if (req.headers["if-none-match"] === etag) {
-      return res.status(304).end();
-    }
-
-    cacheControl(req, res, () => {});
-    res.json({
-      clusters,
-      meta: {
-        section,
-        lang,
-        freshness: +freshness,
-        domainCap: +domainCap,
-        quality,
-        totalArticles: articles.length,
-        totalClusters: clusters.length,
-        generatedAt: new Date().toISOString()
+    const cacheKey = `feed:${section}:${freshness}:${domainCap}:${lang}:${quality}`;
+    
+    // Redis 캐시 확인 (redisClient가 있을 때만)
+    if (redisClient) {
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        const payload = JSON.parse(cached);
+        const etag = generateETag(payload);
+        res.set("ETag", etag);
+        if (req.headers["if-none-match"] === etag) return res.status(304).end();
+        return res.json(payload);
       }
-    });
+    }
+
+    let items = await fetchArticlesForSection(section, freshness, domainCap, lang);
+    if (quality === "high") {
+      await Promise.all(items.map(async (item) => {
+        const content = await safeFetchArticleContent(item.url);
+        if (content) item.content = content;
+      }));
+    }
+    items = await processArticles(items, lang, { aiSummary: quality === "high", postEdit: true });
+
+    let clusters = await clusterArticles(items, lang, quality);
+    clusters = clusters.sort((a,b) => b.rating - a.rating);
+    const top20 = clusters.slice(0, 20);
+    shuffleArray(top20);
+    clusters.splice(0, 20, ...top20);
+
+    const payload = {
+      section, freshness, domain_cap: domainCap, lang,
+      count: items.length,
+      clusters,
+      generatedAt: new Date().toISOString()
+    };
+
+    // Redis 캐시 저장 (redisClient가 있을 때만)
+    if (redisClient) {
+      await redisClient.setEx(cacheKey, 180, JSON.stringify(payload));
+    }
+
+    const etag = generateETag(payload);
+    res.set("ETag", etag);
+    if (req.headers["if-none-match"] === etag) return res.status(304).end();
+
+    res.json(payload);
   } catch (e) {
-    console.error("Feed generation error:", e);
     res.status(500).json({ error: "FEED_GENERATION_FAILED", detail: String(e?.message || e) });
   }
 });
