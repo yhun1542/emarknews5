@@ -523,7 +523,7 @@ async function computeUrgencyBuzz(articles) {
   const xBuzz = await twitterClient.v2.search('breaking news urgent global events', { max_results: 10 });
   return articles.map(a => {
     a.urgency = topics[articleSignature(a)] > 2 ? 1 : 0;
-    a.buzz = xBuzz.data.data.some(p => p.text.includes(a.title)) ? 1 : 0;
+    a.buzz = (xBuzz && xBuzz.data && xBuzz.data.data && xBuzz.data.data.some(p => p.text.includes(a.title))) ? 1 : 0;
     return a;
   });
 }
