@@ -87,8 +87,24 @@ const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 const translateClient = googleCredentialsPath ? 
   new TranslationServiceClient({ keyFilename: googleCredentialsPath }) : 
   null;
-const redisClient = redis.createClient({ url: REDIS_URL });
-redisClient.connect().catch(console.error);
+// Redis 연결 (선택적, 캐시 비활성화 가능)
+let redisClient = null;
+const CACHE_DISABLED = process.env.DISABLE_CACHE === '1' || process.env.DISABLE_CACHE === 'true';
+
+if (!CACHE_DISABLED) {
+  try {
+    redisClient = redis.createClient({ url: REDIS_URL });
+    redisClient.connect().catch((err) => {
+      console.warn('Redis 연결 실패, 캐시 비활성화:', err.message);
+      redisClient = null;
+    });
+  } catch (err) {
+    console.warn('Redis 클라이언트 생성 실패, 캐시 비활성화:', err.message);
+    redisClient = null;
+  }
+} else {
+  console.log('캐시가 환경변수로 비활성화됨 (DISABLE_CACHE=1)');
+}
 const rssParser = new Parser();
 
 /* 상수/유틸 */
