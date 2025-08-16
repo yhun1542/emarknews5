@@ -16,7 +16,12 @@ const redis = require("redis");
 const NewsAPI = require("newsapi");
 const { TwitterApi } = require("twitter-api-v2");
 const Parser = require("rss-parser");
-const rssParser = new Parser({ timeout: 10000 });
+const rssParser = new Parser({
+  timeout: 10000,
+  headers: {
+    'User-Agent': 'EmarkNewsBot/1.0 (+https://emarknews.com)',
+  }
+});
 const math = require("mathjs");
 const axios = require("axios");
 const cheerio = require("cheerio");
