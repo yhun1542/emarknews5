@@ -137,19 +137,6 @@ try {
     console.error('Google Translate 인증 정보 파싱 오류:', e);
 }
 const translateClient = new TranslationServiceClient(translateClientOptions);
-const GCLOUD_SA_KEY = process.env.TRANSLATE_API_KEY;
-let translateClientOptions = {};
-try {
-    if (GCLOUD_SA_KEY && GCLOUD_SA_KEY.startsWith('{')) {
-        const credentials = JSON.parse(GCLOUD_SA_KEY);
-        translateClientOptions = { credentials };
-    } else {
-        translateClientOptions = { keyFilename: GCLOUD_SA_KEY };
-    }
-} catch (e) {
-    console.error('Google Translate 인증 정보 파싱 오류:', e);
-}
-const translateClient = new TranslationServiceClient(translateClientOptions);
 // Redis 연결 (선택적, 캐시 비활성화 가능)
 let redisClient = null;
 const CACHE_DISABLED = process.env.DISABLE_CACHE === '1' || process.env.DISABLE_CACHE === 'true';
