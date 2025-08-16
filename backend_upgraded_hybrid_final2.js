@@ -124,9 +124,19 @@ if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
 const newsapi = new NewsAPI(newsApiKey);
 const twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN);
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
-const translateClient = googleCredentialsPath ? 
-  new TranslationServiceClient({ keyFilename: googleCredentialsPath }) : 
-  null;
+const GCLOUD_SA_KEY = process.env.TRANSLATE_API_KEY;
+let translateClientOptions = {};
+try {
+    if (GCLOUD_SA_KEY && GCLOUD_SA_KEY.startsWith('{')) {
+        const credentials = JSON.parse(GCLOUD_SA_KEY);
+        translateClientOptions = { credentials };
+    } else {
+        translateClientOptions = { keyFilename: GCLOUD_SA_KEY };
+    }
+} catch (e) {
+    console.error('Google Translate 인증 정보 파싱 오류:', e);
+}
+const translateClient = new TranslationServiceClient(translateClientOptions);
 // Redis 연결 (선택적, 캐시 비활성화 가능)
 let redisClient = null;
 const CACHE_DISABLED = process.env.DISABLE_CACHE === '1' || process.env.DISABLE_CACHE === 'true';
@@ -361,7 +371,7 @@ async function enrichCluster(cluster, lang) {
   cluster.rating = computeRating(cluster);
 }
 
-async function clusterArticles(articles, quality = "low") {
+async function clusterArticles(articles, lang, quality = "low") {
   if (!Array.isArray(articles) || !articles.length) return [];
   const docs = articles.map(a => [a.title, a.summary, a.content].join(" "));
   const keywordsList = extractKeywordsWithTFIDF(docs);
@@ -548,7 +558,7 @@ async function fetchArticlesForSection(section, freshness, domainCap, lang) {
   const minTs = NOW() - freshness * HOUR;
   if (section === "world") {
     const rssUrls = [
-      'https://apnews.com/index.rss',
+      'https://feeds.reuters.com/reuters/topNews',
       'https://feeds.bbci.co.uk/news/rss.xml',
       'https://nypost.com/feed/',
       'https://www.cnbc.com/id/100003114/device/rss/rss.html'
@@ -704,7 +714,7 @@ app.get("/feed", async (req, res) => {
     });
 
     const enrichedArticles = await computeUrgencyBuzz(processedArticles);
-    const clusters = await clusterArticles(enrichedArticles, quality);
+    const clusters = await clusterArticles(enrichedArticles, lang, quality);
 
     const etag = generateETag({ clusters, meta: { section, lang, freshness: +freshness, domainCap: +domainCap, quality } });
     res.set("ETag", etag);
