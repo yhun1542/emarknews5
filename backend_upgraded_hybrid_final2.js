@@ -845,6 +845,15 @@ async function fetchFromRSS(urls, maxItemsPerFeed = 10, sourceLang = undefined) 
 /* 섹션별 기사 수집 로직 (재설계) */
 async function fetchArticlesForSection(section, freshness, domainCap, lang) {
   let items = [];
+  try {
+    items = await fetchFromApis(section, lang);  // NewsAPI/Naver/X 등 API 호출 (e.g., NewsAPI for world/business, Naver for kr, Japan RSS for japan)
+    if (items.length > 0) return filterItems(items, freshness, domainCap);  // 성공 시 반환
+  } catch (e) { console.error("API error:", e); }
+  // RSS fallback
+  try {
+    items = await fetchFromRss(rssUrls);
+  } catch (e) { console.error("RSS fallback error:", e); }
+  return filterItems(items, freshness, domainCap);  // 48시간 이내, 점수/태그 추가 로직
 
   console.log(`ℹ️ Fetching articles for section: ${section}`);
 
@@ -1189,10 +1198,12 @@ app.use((err, req, res, next) => {
 
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
-  app.listen(PORT, '0.0.0.0', () => console.log(`🚀 [UPGRADED v4.2 STABILITY PATCH] backend started on :${PORT}`));
+app.listen(process.env.PORT || 3000, "0.0.0.0", () => console.log(`Server on ${process.env.PORT || 3000}`));
 }
 
 module.exports = {
   app
   // 테스트용 export는 제거됨
 };
+process.on("unhandledRejection", (err) => console.error(err));
+process.on("uncaughtException", (err) => console.error(err));
