@@ -9,6 +9,7 @@ require('dotenv').config();
 
 const express = require("express");
 const path = require("path");
+const fs = require("fs");
 const crypto = require("crypto");
 const OpenAI = require("openai");;
 const { TranslationServiceClient } = require("@google-cloud/translate").v3;
@@ -26,13 +27,21 @@ const app = express();
 app.use(express.json());
 app.use(expressGzip()); // Gzip for speed
 
-// 정적 파일 루트: ./public (캐시 헤더 포함)
+// 정적 파일 서빙 (public 우선, 없으면 루트 파일로 포워딩)
 const PUBLIC_DIR = path.join(__dirname, 'public');
-app.use(express.static(PUBLIC_DIR, { 
-  maxAge: '1h', 
-  etag: true, 
-  lastModified: true 
-}));
+try { app.use(express.static(PUBLIC_DIR)); } catch {}
+
+const INDEX_CANDIDATES = [
+  path.join(__dirname, 'public', 'index_gemini_grok_final.html'),
+  path.join(__dirname, 'index_gemini_grok_final.html')
+];
+
+app.get('/', (req, res) => {
+  const indexPath = INDEX_CANDIDATES.find(p => {
+    try { return fs.existsSync(p); } catch { return false; }
+  }) || INDEX_CANDIDATES[0];
+  res.sendFile(indexPath);
+});
 
 /* 환경 변수 */
 const {
@@ -50,61 +59,35 @@ const {
   NODE_ENV = "development"
 } = process.env;
 
-// NewsAPI 초기화 - 환경 변수 우선순위: NEWS_API_KEY > NEWS_API_KEYS
-let newsApiKey = NEWS_API_KEY;
-if (!newsApiKey && NEWS_API_KEYS) {
-  newsApiKey = NEWS_API_KEYS.split(",")[0];
-}
-
-if (!newsApiKey) {
-  console.error("❌ NewsAPI key not found. Please set NEWS_API_KEY or NEWS_API_KEYS environment variable.");
-  process.exit(1);
-}
-
-// GOOGLE_APPLICATION_CREDENTIALS JSON 처리
-const fs = require('fs');
-let googleCredentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-
-if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-  const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (gac.trim().startsWith('{')) {
-    // JSON 형태인 경우 파일로 저장
-    const credentialsPath = path.join(__dirname, 'gcloud_sa.json');
-    try {
-      fs.writeFileSync(credentialsPath, gac);
-      googleCredentialsPath = credentialsPath;
-      console.log('✅ Google credentials JSON saved to file');
-    } catch (error) {
-      console.error('❌ Failed to save Google credentials:', error.message);
+// GOOGLE_APPLICATION_CREDENTIALS가 JSON 문자열이면 파일로 저장하여 경로로 치환
+(function ensureGoogleCredsFile(){
+  try {
+    const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    if (gac && gac.trim().startsWith('{')) {
+      const credPath = path.join(__dirname, 'google-credentials.json');
+      fs.writeFileSync(credPath, gac, { mode: 0o600 });
+      process.env.GOOGLE_APPLICATION_CREDENTIALS = credPath;
+      console.log("[diag] GOOGLE_APPLICATION_CREDENTIALS → 파일 경로 전환 완료");
     }
+  } catch(e){
+    console.warn("[diag] GOOGLE_APPLICATION_CREDENTIALS 파일 전환 실패:", e.message);
   }
-}
+})();
+
+// NewsAPI 초기화 - 환경 변수 우선순위: NEWS_API_KEY > NEWS_API_KEYS
+const newsapi = new NewsAPI(process.env.NEWS_API_KEY || (NEWS_API_KEYS||"").split(",")[0] || "");
 
 // 초기화
-const newsapi = new NewsAPI(newsApiKey);
 const twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN);
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
-const translateClient = googleCredentialsPath ? 
-  new TranslationServiceClient({ keyFilename: googleCredentialsPath }) : 
-  null;
-// Redis 연결 (선택적, 캐시 비활성화 가능)
-let redisClient = null;
-const CACHE_DISABLED = process.env.DISABLE_CACHE === '1' || process.env.DISABLE_CACHE === 'true';
-
-if (!CACHE_DISABLED) {
-  try {
-    redisClient = redis.createClient({ url: REDIS_URL });
-    redisClient.connect().catch((err) => {
-      console.warn('Redis 연결 실패, 캐시 비활성화:', err.message);
-      redisClient = null;
-    });
-  } catch (err) {
-    console.warn('Redis 클라이언트 생성 실패, 캐시 비활성화:', err.message);
-    redisClient = null;
-  }
-} else {
-  console.log('캐시가 환경변수로 비활성화됨 (DISABLE_CACHE=1)');
-}
+const translateClient = new TranslationServiceClient();
+const useTLS = typeof REDIS_URL === "string" && REDIS_URL.startsWith("rediss://");
+const redisClient = redis.createClient({
+  url: REDIS_URL,
+  socket: { tls: useTLS, reconnectStrategy: (r) => Math.min(1000 * 2 ** r, 30000) }
+});
+redisClient.on("error", (e) => console.error("[redis] error:", e.message));
+(async ()=>{ try { await redisClient.connect(); } catch(e){ console.error("[redis] connect failed:", e.message);} })();
 const rssParser = new Parser();
 
 /* 상수/유틸 */
@@ -709,14 +692,32 @@ function generateETag(data) { return crypto.createHash("md5").update(JSON.string
 
 function cacheControl(_req, res, next) { res.set("Cache-Control","public, max-age=60, stale-while-revalidate=300"); next(); }
 
-app.get("/healthz", (_req, res) => {
+// 키 보유 여부 진단
+const HAS_NEWS_KEY = !!(process.env.NEWS_API_KEY || process.env.NEWSAPI_KEY || NEWS_API_KEYS);
+const HAS_TWITTER  = !!process.env.TWITTER_BEARER_TOKEN;
+app.get("/_diag/keys", (req, res) => {
+  res.json({ NEWS_API_KEY: HAS_NEWS_KEY, TWITTER_BEARER_TOKEN: HAS_TWITTER });
+});
+
+// Redis 진단
+app.get("/_diag/redis", async (req, res) => {
+  try { return res.json({ ok: true, ping: await redisClient.ping() }); }
+  catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// 헬스 체크 확장
+app.get("/healthz", async (_req, res) => {
+  let redisStatus = "NG";
+  try { redisStatus = await redisClient.ping(); } catch {}
   res.json({
     status:"ok",
     env:NODE_ENV,
     uptime:process.uptime(),
     time:new Date().toISOString(),
     cache:{ policy:"public, max-age=60, stale-while-revalidate=300", etagEnabled:true },
-    version:"1.0.0"
+    version:"1.0.0",
+    keys:{ NEWS_API_KEY: HAS_NEWS_KEY, TWITTER_BEARER_TOKEN: HAS_TWITTER },
+    redis: redisStatus
   });
 });
 

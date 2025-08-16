@@ -3,3 +3,6 @@ node_modules
 app.log
 *.log
 .DS_Store
+# Google SA file written at runtime
+google-credentials.json
+*.credentials.json
