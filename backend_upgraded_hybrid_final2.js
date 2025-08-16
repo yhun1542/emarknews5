@@ -86,28 +86,36 @@ if (!newsApiKey) {
   process.exit(1);
 }
 
-// GOOGLE_APPLICATION_CREDENTIALS JSON 처리
+// GOOGLE_APPLICATION_CREDENTIALS 처리 (PEM/JSON 지원)
 const fs = require('fs');
-let googleCredentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
+// Google Credentials 처리 (기존 코드 확장)
+let googleCredentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
   const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
   let credentialsPath;
   if (gac.startsWith('{')) {
-    // JSON 형식 (기존 코드)
+    // JSON 형식 (기존 처리)
     credentialsPath = path.join(__dirname, 'gcloud_sa.json');
   } else if (gac.startsWith('-----BEGIN PRIVATE KEY-----')) {
-    // PEM 형식 추가
+    // PEM 형식 추가 (로그 기반)
     credentialsPath = path.join(__dirname, 'gcloud_sa.pem');
+  } else {
+    console.error('❌ Invalid Google credentials format');
+    console.error('Expected: JSON (starts with {) or PEM (starts with -----BEGIN PRIVATE KEY-----)');
+    // 에러 시에도 서비스 계속 실행 (번역 기능만 비활성화)
+    googleCredentialsPath = null;
   }
+
   if (credentialsPath) {
     try {
       fs.writeFileSync(credentialsPath, gac);
-      process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath; // 환경 변수 업데이트
+      process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
       googleCredentialsPath = credentialsPath;
-      console.log('✅ Google credentials saved to file');
+      console.log('✅ Google credentials saved to file:', credentialsPath);
     } catch (error) {
       console.error('❌ Failed to save Google credentials:', error.message);
+      googleCredentialsPath = null;
     }
   }
 }
@@ -416,8 +424,15 @@ async function translateText(text, targetLang = "ko") {
     const [response] = await translateClient.translateText(request);
     return response.translations[0].translatedText || text;
   } catch (e) {
-    console.error("Translate Error:", e);
-    return text;
+    // 로그 폭주 방지를 위해 에러 타입별 처리
+    if (e.code === 'UNAUTHENTICATED') {
+      console.error("❌ Google Translate authentication failed - check credentials");
+    } else if (e.code === 'PERMISSION_DENIED') {
+      console.error("❌ Google Translate permission denied - check project ID and API enabled");
+    } else {
+      console.error("❌ Translate Error:", e.message || e);
+    }
+    return text; // 번역 실패 시 원문 반환
   }
 }
 
