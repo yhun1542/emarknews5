@@ -19,7 +19,7 @@ const Parser = require("rss-parser");
 const rssParser = new Parser({
   timeout: 10000,
   headers: {
-    'User-Agent': 'EmarkNewsBot/1.0 (+https://emarknews.com)',
+    "User-Agent": "EmarkNewsBot/1.0 (+https://emarknews.com)"
   }
 });
 const math = require("mathjs");
@@ -574,7 +574,9 @@ const rssUrls = [
   "http://rss.asahi.com/rss/asahi/newsheadlines.rdf",
   "http://www3.nhk.or.jp/rss/news/cat0.xml",
   "https://soranews24.com/feed/",
-  "https://www.japantimes.co.jp/feed/"
+  "https://www.japantimes.co.jp/feed/",
+  "https://www.yonhapnewstv.co.kr/browse/feed/",
+  "https://www.ytn.co.kr/rss/major.xml"
 ];
     for (const url of rssUrls) {
       try {
