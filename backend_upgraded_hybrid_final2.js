@@ -1,6 +1,6 @@
 
 /*
- * EmarkNews — 업그레이드 백엔드 (v4: API 중심 아키텍처, Naver API 통합, 불릿 포인트 요약, 안정성 강화)
+ * EmarkNews — 업그레이드 백엔드 (v4.2: v4 기반 + 통합 안정성 패치: Vector Mutation, Invalid Time Value 수정, 초기화 강화)
  */
 
 "use strict";
@@ -334,13 +334,15 @@ function computeRating(cluster) {
   return Math.min(5.0, Math.max(1.0, rating));
 }
 
+// [v4.2 Patch] createEmptyCluster 수정: 시간 처리 안정화
 function createEmptyCluster(signature) {
   return {
     id: hashId(signature + ":" + Math.random().toString(36).slice(2,8)),
     signature,
     keywords: signature ? signature.split("|").filter(k => k) : [],
     articles: [],
-    centroid: { titleTokens:new Map(), publishedAtAvg:0 },
+    // validTsCount 추가하여 평균 계산 안정성 확보
+    centroid: { titleTokens:new Map(), publishedAtAvg:0, validTsCount: 0 },
     score: 0,
     labels: [],
     rating: 0,
@@ -348,20 +350,28 @@ function createEmptyCluster(signature) {
   };
 }
 
+// [v4.2 Patch] updateCentroid 수정: 시간 처리 안정화 (Invalid Time Value 해결)
 function updateCentroid(cluster, article) {
   const keys = extractKeywordsWithTFIDF([article.title || ""])[0].filter(k => k);
   for (const k of keys) {
     cluster.centroid.titleTokens.set(k, (cluster.centroid.titleTokens.get(k)||0)+1);
   }
+  
   const ts = article.publishedAt ? Date.parse(article.publishedAt) : NaN;
+
+  // 유효한 타임스탬프만 평균 계산에 포함
   if (Number.isFinite(ts)) {
-    const n = cluster.articles.length;
-    const prev = cluster.centroid.publishedAtAvg || ts;
-    // n이 0일 경우 (첫 기사) 처리
-    if (n === 0) {
+    const prevAvg = cluster.centroid.publishedAtAvg;
+    const validTsCount = cluster.centroid.validTsCount; 
+
+    if (!Number.isFinite(prevAvg) || validTsCount === 0) {
+        // 클러스터의 첫 번째 유효한 타임스탬프
         cluster.centroid.publishedAtAvg = ts;
+        cluster.centroid.validTsCount = 1;
     } else {
-        cluster.centroid.publishedAtAvg = (prev * n + ts) / (n + 1);
+        // 평균 업데이트
+        cluster.centroid.publishedAtAvg = (prevAvg * validTsCount + ts) / (validTsCount + 1);
+        cluster.centroid.validTsCount = validTsCount + 1;
     }
   }
 }
@@ -427,25 +437,36 @@ async function enrichCluster(cluster, lang) {
   cluster.isBuzz = cluster.articles.some(a => a.buzz > 0);
 }
 
-// 코사인 유사도 계산 함수 (mathjs 사용)
+// [v4.2 Patch] 코사인 유사도 계산 함수: 데이터 변조(Mutation) 버그 수정
 function cosineSimilarity(vecA, vecB) {
     try {
-        // 벡터 길이 확인 및 패딩 (필요시)
-        const maxLength = Math.max(vecA.length, vecB.length);
-        while (vecA.length < maxLength) vecA.push(0);
-        while (vecB.length < maxLength) vecB.push(0);
+        // Safety check 1: Ensure inputs are valid arrays and not empty
+        if (!Array.isArray(vecA) || !Array.isArray(vecB) || vecA.length === 0 || vecB.length === 0) {
+            return 0;
+        }
+
+        // Safety check 2: Ensure lengths match.
+        // 이전 버전의 데이터 변조(push(0)) 로직 제거됨. 아키텍처상 길이가 동일해야 함.
+        if (vecA.length !== vecB.length) {
+            console.warn(`Warning: Vector dimensions do not match (${vecA.length} vs ${vecB.length}). Returning 0.`);
+            return 0;
+        }
 
         const dot = math.dot(vecA, vecB);
         const normA = math.norm(vecA);
         const normB = math.norm(vecB);
+
+        // Safety check 3: Prevent division by zero
         if (normA === 0 || normB === 0) return 0;
+
         return dot / (normA * normB);
     } catch (e) {
-        // 계산 오류 발생 시 0 반환
         console.error("Cosine Similarity Error:", e.message);
         return 0;
     }
 }
+
+/* 번역 및 AI 처리 함수들 */
 
 async function clusterArticles(articles, lang, quality = "low") {
   if (!Array.isArray(articles) || !articles.length) return [];
@@ -1156,7 +1177,7 @@ app.get("/healthz", (_req, res) => {
     env:NODE_ENV,
     uptime:process.uptime(),
     time:new Date().toISOString(),
-    version:"4.0.0" // 버전 업데이트
+    version:"4.2.0" // 버전 업데이트
   });
 });
 
@@ -1168,7 +1189,7 @@ app.use((err, req, res, next) => {
 
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
-  app.listen(PORT, '0.0.0.0', () => console.log(`🚀 [UPGRADED v4 FINAL] backend started on :${PORT}`));
+  app.listen(PORT, '0.0.0.0', () => console.log(`🚀 [UPGRADED v4.2 STABILITY PATCH] backend started on :${PORT}`));
 }
 
 module.exports = {
