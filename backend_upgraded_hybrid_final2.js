@@ -243,7 +243,11 @@ function extractKeywordsWithTFIDF(docs, topK = SIGNATURE_TOPK) {
   const idf = new Map(Array.from(docFreq).map(([t, df]) => [t, Math.log(docs.length / (1 + df))]));
   return termFreq.map(freq => {
     const tfidf = Array.from(freq).map(([t, tf]) => [t, tf * (idf.get(t) || 0)]);
-    return tfidf.sort((a, b) => b[1] - a[1]).slice(0, topK).map(([t]) => t);
+    const topKeywords = tfidf.sort((a, b) => b[1] - a[1]).slice(0, topK).map(([t]) => t);
+    while (topKeywords.length < topK) {
+      topKeywords.push(null); // 길이가 짧으면 null로 패딩
+    }
+    return topKeywords;
   });
 }
 
