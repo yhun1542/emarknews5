@@ -802,7 +802,7 @@ app.use((err, req, res, next) => {
 
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
-  app.listen(PORT, '0.0.0.0', () => console.log(`[UPGRADED HYBRID FINAL] backend started on :${PORT}`));
+app.listen(process.env.PORT || 3000, "0.0.0.0", () => console.log(`[FINAL] Server running on port ${process.env.PORT || 3000}`));
 }
 
 module.exports = {
@@ -814,3 +814,5 @@ module.exports = {
   sourceWeight
 };
 
+process.on("unhandledRejection", (err) => console.error("Unhandled Rejection:", err));
+process.on("uncaughtException", (err) => console.error("Uncaught Exception:", err));
