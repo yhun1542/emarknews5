@@ -140,8 +140,6 @@ if (!CACHE_DISABLED) {
 } else {
   console.log('캐시가 환경변수로 비활성화됨 (DISABLE_CACHE=1)');
 }
-const rssParser = new Parser();
-
 /* 상수/유틸 */
 const NOW = () => Date.now();
 const HOUR = 3600 * 1000;
