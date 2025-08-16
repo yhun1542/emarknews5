@@ -91,24 +91,21 @@ const fs = require('fs');
 let googleCredentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
 if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-  const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (gac.trim().startsWith('-----BEGIN PRIVATE KEY-----')) {
-    // PEM 형태인 경우 파일로 저장
-    const credentialsPath = path.join(__dirname, 'gcloud_sa.pem');
+  const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
+  let credentialsPath;
+  if (gac.startsWith('{')) {
+    // JSON 형식 (기존 코드)
+    credentialsPath = path.join(__dirname, 'gcloud_sa.json');
+  } else if (gac.startsWith('-----BEGIN PRIVATE KEY-----')) {
+    // PEM 형식 추가
+    credentialsPath = path.join(__dirname, 'gcloud_sa.pem');
+  }
+  if (credentialsPath) {
     try {
       fs.writeFileSync(credentialsPath, gac);
+      process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath; // 환경 변수 업데이트
       googleCredentialsPath = credentialsPath;
-      console.log('✅ Google PEM credentials saved to file');
-    } catch (error) {
-      console.error('❌ Failed to save Google PEM credentials:', error.message);
-    }
-  } else if (gac.trim().startsWith('{')) {
-    // JSON 형태인 경우 파일로 저장
-    const credentialsPath = path.join(__dirname, 'gcloud_sa.json');
-    try {
-      fs.writeFileSync(credentialsPath, gac);
-      googleCredentialsPath = credentialsPath;
-      console.log('✅ Google credentials JSON saved to file');
+      console.log('✅ Google credentials saved to file');
     } catch (error) {
       console.error('❌ Failed to save Google credentials:', error.message);
     }
