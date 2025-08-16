@@ -28,6 +28,8 @@ const cheerio = require("cheerio");
 const zlib = require("zlib");
 const expressGzip = require("compression");
 const app = express();
+const rateLimit = require("express-rate-limit");
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 
 app.use(express.json());
 app.use(expressGzip()); // Gzip for speed
