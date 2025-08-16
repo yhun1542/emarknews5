@@ -97,7 +97,7 @@ const fs = require('fs');
 // Google Credentials 처리 (기존 코드 확장)
 let googleCredentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-  const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
+  let gac = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
     gac = gac.replace(/\\n/g, "\n");
   let credentialsPath;
   if (gac.startsWith('{')) {
