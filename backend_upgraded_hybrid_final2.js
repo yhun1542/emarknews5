@@ -938,6 +938,7 @@ function filterItems(items, freshness = 48, domainCap = 50) {
 
 /* 섹션별 기사 수집 로직 (재설계) */
 async function fetchArticlesForSection(section, freshness, domainCap, lang) {
+try { items = await fetchFromApis(section, lang); if (items.length > 0) return items; } catch (e) { } // RSS fallback
   let items = [];
   
   // RSS URLs 정의
@@ -1018,6 +1019,7 @@ async function generateFeed(section, freshness, domainCap, lang, quality) {
   try {
     // 1. 기사 수집
     let items = await fetchArticlesForSection(section, freshness, domainCap, lang);
+try { items = await fetchFromApis(section, lang); if (items.length > 0) return items; } catch (e) { } // RSS fallback
     
     if (items.length === 0) {
       return { articles: [], clusters: [], meta: { total: 0, section, lang } };
@@ -1068,6 +1070,7 @@ app.get("/api/news", cacheControl, async (req, res) => {
     
     // feed 엔드포인트와 동일한 로직 실행
     const items = await fetchArticlesForSection(section, freshness, domainCap, lang);
+try { items = await fetchFromApis(section, lang); if (items.length > 0) return items; } catch (e) { } // RSS fallback
     
     if (items.length > 0) {
       const processedItems = await computeUrgencyBuzz(items);
@@ -1127,6 +1130,7 @@ app.get("/feed", cacheControl, async (req, res) => {
 
     // 1. 기사 수집
     let items = await fetchArticlesForSection(section, freshness, domainCap, lang);
+try { items = await fetchFromApis(section, lang); if (items.length > 0) return items; } catch (e) { } // RSS fallback
 
     // 2. 긴급도/화제성 계산 (X API 호출)
     // 'buzz' 섹션이 아니더라도 계산은 수행 (클러스터 레이팅에 반영됨)
