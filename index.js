@@ -1,8 +1,9 @@
 /*
- * EmarkNews — 업그레이드 백엔드 (v4.6.0: 복원력 강화 패치 - Google 번역 인증 완전 수정)
+ * EmarkNews — 업그레이드 백엔드 (v4.6.1: 로그 레벨 제어 시스템 구현)
  * 1.1: Google 번역 인증 수정 및 폴백 추가 (GOOGLE_APPLICATION_CREDENTIALS_JSON 지원)
  * 1.2: 주요 기사 처리 파이프라인 강화 (복원력 있는 번역 함수 사용)
  * 1.3: 사소한 수정 적용 (한국 뉴스 수정, 트위터 API 비활성화)
+ * 1.4: LOG_LEVEL 환경변수 기반 조건부 디버그 로깅 시스템 추가
  */
 
 "use strict";
@@ -46,8 +47,35 @@ const {
   NAVER_CLIENT_ID = "",
   NAVER_CLIENT_SECRET = "",
   YOUTUBE_API_KEY = "",
-  NODE_ENV = "development"
+  NODE_ENV = "development",
+  LOG_LEVEL = "info"
 } = process.env;
+
+/* 로그 레벨 제어 시스템 */
+const isDebug = LOG_LEVEL === 'debug';
+const isVerbose = LOG_LEVEL === 'verbose' || isDebug;
+
+// 로그 헬퍼 함수들
+const logger = {
+  debug: (message) => {
+    if (isDebug) console.log(`🔍 [DEBUG] ${message}`);
+  },
+  verbose: (message) => {
+    if (isVerbose) console.log(`📝 [VERBOSE] ${message}`);
+  },
+  info: (message) => {
+    console.log(`ℹ️ [INFO] ${message}`);
+  },
+  warn: (message) => {
+    console.warn(`⚠️ [WARN] ${message}`);
+  },
+  error: (message) => {
+    console.error(`❌ [ERROR] ${message}`);
+  },
+  critical: (message) => {
+    console.error(`🚨 [CRITICAL] ${message}`);
+  }
+};
 
 // 진단 엔드포인트
 app.get('/_diag/keys', (req, res) => {
@@ -64,7 +92,7 @@ app.get('/_diag/keys', (req, res) => {
   res.json({
     status: "ok",
     keys,
-    version: "4.6.0",
+    version: "4.6.1",
     timestamp: new Date().toISOString()
   });
 });
@@ -73,7 +101,7 @@ app.get('/_diag/keys', (req, res) => {
 app.get('/healthz', (req, res) => {
   res.json({
     status: "ok",
-    version: "4.6.0",
+    version: "4.6.1",
     timestamp: new Date().toISOString()
   });
 });
@@ -150,9 +178,9 @@ if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
     try {
         const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
         translateClient = new TranslationServiceClient({ credentials });
-        console.log('✅ [INFO-P1] 환경 변수로부터 Google 번역 클라이언트를 성공적으로 초기화했습니다.');
+        logger.info('환경 변수로부터 Google 번역 클라이언트를 성공적으로 초기화했습니다.');
     } catch (error) {
-        console.error('❌ [CRITICAL-P1] GOOGLE_APPLICATION_CREDENTIALS_JSON 파싱에 실패했습니다. 유효한 한 줄의 JSON 문자열인지 확인하세요. 번역이 비활성화됩니다.', error);
+        logger.critical(`GOOGLE_APPLICATION_CREDENTIALS_JSON 파싱에 실패했습니다. 유효한 한 줄의 JSON 문자열인지 확인하세요. 번역이 비활성화됩니다. ${error.message}`);
         translateClient = null; // 파싱 실패 시 클라이언트 비활성화
     }
 } else {
@@ -622,18 +650,18 @@ async function clusterArticles(articles, lang, quality = "low") {
  * @returns {Promise<string>} 번역된 텍스트 또는 폴백으로 사용될 원본 텍스트.
  */
 async function translateText(text, targetLang = "ko") {
-  console.log(`🔍 [DEBUG-P1] Starting translation. Target: ${targetLang}, Text length: ${text?.length || 0}`);
+  logger.debug(`Starting translation. Target: ${targetLang}, Text length: ${text?.length || 0}`);
   
   // 클라이언트가 초기화되지 않았거나 텍스트가 없으면 즉시 폴백합니다.
   if (!translateClient || !text) {
-      console.warn(`⚠️ [DEBUG-P1] Translation skipped - missing requirements. Text: ${!!text}, Client: ${!!translateClient}`);
+      logger.warn(`Translation skipped - missing requirements. Text: ${!!text}, Client: ${!!translateClient}`);
       return text;
   }
 
   // 간단한 언어 감지 (한국어 텍스트를 한국어로 번역 요청 방지)
   const isKorean = /[가-힣]/.test(text);
   if (isKorean && targetLang === 'ko') {
-      console.log(`🔍 [DEBUG-P1] Translation skipped - Korean text to Korean`);
+      logger.debug(`Translation skipped - Korean text to Korean`);
       return text;
   }
 
@@ -645,22 +673,22 @@ async function translateText(text, targetLang = "ko") {
   };
   
   try {
-    console.log(`🔍 [DEBUG-P1] Calling Google Translate API`);
+    logger.debug(`Calling Google Translate API`);
     const [response] = await translateClient.translateText(request);
     if (response.translations && response.translations.length > 0) {
         const translated = response.translations[0].translatedText || text;
-        console.log(`✅ [DEBUG-P1] Translation successful. Original: ${text.slice(0, 30)}... -> Translated: ${translated.slice(0, 30)}...`);
+        logger.verbose(`Translation successful. Original: ${text.slice(0, 30)}... -> Translated: ${translated.slice(0, 30)}...`);
         return translated;
     }
-    console.warn(`⚠️ [DEBUG-P1] Translation response empty, returning original text`);
+    logger.warn(`Translation response empty, returning original text`);
     return text;
   } catch (error) {
-    console.error(`❌ [CRITICAL-P1] 텍스트 덩어리에 대한 Google 번역 API 호출 실패. 원본 텍스트를 반환합니다. 오류: ${error.message}`);
+    logger.critical(`텍스트 덩어리에 대한 Google 번역 API 호출 실패. 원본 텍스트를 반환합니다. 오류: ${error.message}`);
     
     if (error.response) {
         // 서버가 응답했으나 오류 상태 코드인 경우 (4xx, 5xx)
-        console.error(`-> Status: ${error.response.status}`);
-        console.error(`-> Response Body: ${JSON.stringify(error.response.data)}`);
+        logger.error(`-> Status: ${error.response.status}`);
+        logger.error(`-> Response Body: ${JSON.stringify(error.response.data)}`);
         
         if (error.response.status === 429) {
             console.error("-> Hint: API Rate Limit Exceeded (Quota). Check API provider dashboard.");
@@ -756,10 +784,10 @@ Structured Summary:`;
 async function processArticles(articles, lang, options = {}) {
   const { aiSummary = true, quality } = options;
   
-  console.log(`🔍 [DEBUG-P1] Starting article processing: ${articles.length} articles, lang: ${lang}, aiSummary: ${aiSummary}, quality: ${quality}`);
+  logger.debug(`Starting article processing: ${articles.length} articles, lang: ${lang}, aiSummary: ${aiSummary}, quality: ${quality}`);
 
   return Promise.all(articles.map(async (article, index) => {
-    console.log(`🔍 [DEBUG-P1] Processing article ${index + 1}/${articles.length}: ${article.title?.slice(0, 50)}...`);
+    logger.debug(`Processing article ${index + 1}/${articles.length}: ${article.title?.slice(0, 50)}...`);
     
     // 모든 키가 존재하도록 기본 객체를 사용합니다
     const processedArticle = {
@@ -775,11 +803,11 @@ async function processArticles(articles, lang, options = {}) {
     // 1. AI 요약 생성 (카드 뷰용 불릿 포인트)
     if (aiSummary) {
         try {
-            console.log(`🔍 [DEBUG-P1] Starting AI summary generation for article ${index + 1}`);
+            logger.debug(`Starting AI summary generation for article ${index + 1}`);
             processedArticle.aiSummaryBullet = await generateAiSummary(processedArticle, "bullet");
-            console.log(`✅ [DEBUG-P1] AI bullet summary completed for article ${index + 1}`);
+            logger.verbose(`AI bullet summary completed for article ${index + 1}`);
         } catch (error) {
-            console.error(`❌ [CRITICAL-P1] AI bullet summary failed for article ${index + 1}:`, error.message);
+            logger.critical(`AI bullet summary failed for article ${index + 1}: ${error.message}`);
             processedArticle.aiSummaryBullet = processedArticle.summary || processedArticle.description;
         }
         
@@ -787,9 +815,9 @@ async function processArticles(articles, lang, options = {}) {
         if (quality === 'high') {
             try {
                 processedArticle.aiSummaryDetailed = await generateAiSummary(processedArticle, "modal");
-                console.log(`✅ [DEBUG-P1] AI detailed summary completed for article ${index + 1}`);
+                logger.verbose(`AI detailed summary completed for article ${index + 1}`);
             } catch (error) {
-                console.error(`❌ [CRITICAL-P1] AI detailed summary failed for article ${index + 1}:`, error.message);
+                logger.critical(`AI detailed summary failed for article ${index + 1}: ${error.message}`);
                 processedArticle.aiSummaryDetailed = processedArticle.summary || processedArticle.description;
             }
         }
@@ -1394,7 +1422,7 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   // Railway 환경에서는 0.0.0.0으로 리스닝해야 함
-app.listen(process.env.PORT || 8080, "0.0.0.0", () => console.log(`✅ [RESILIENCE PATCH v4.6.0] Server listening on :${process.env.PORT || 8080}`));
+app.listen(process.env.PORT || 8080, "0.0.0.0", () => logger.info(`[LOG LEVEL CONTROL v4.6.1] Server listening on :${process.env.PORT || 8080} (LOG_LEVEL=${LOG_LEVEL})`));
 }
 
 module.exports = {

@@ -1,6 +1,6 @@
 {
   "name": "emarknews5-backend",
-  "version": "4.6.0",
+  "version": "4.6.1",
   "description": "EmarkNews AI Powered News Aggregator Backend",
   "main": "index.js",
   "scripts": {
