@@ -370,9 +370,17 @@ function freshnessWeight(publishedAt) {
   if (!publishedAt) return 0.9;
   const ts = typeof publishedAt==="string" ? Date.parse(publishedAt) : +publishedAt;
   if (!Number.isFinite(ts)) return 0.9;
-  const hours = (NOW()-ts)/HOUR;
-  // 최신 기사에 더 높은 가중치 부여
-  const w = Math.exp(-Math.max(0,hours)/TIME_DECAY_TAU_HOURS);
+  
+  // 동적 시간 감쇠 로직: 주중/주말 구분
+  const now = new Date();
+  const currentDay = now.getUTCDay(); // 0:일요일, 1:월요일, ..., 6:토요일
+
+  // 주말(토, 일)에는 시간 감쇠를 완화하여 기사가 더 오래 높은 점수를 유지하도록 함
+  const isWeekend = (currentDay === 0 || currentDay === 6);
+  const TIME_DECAY_TAU_HOURS = isWeekend ? 120 : 72; // 주말: 120시간(5일), 주중: 72시간(3일)
+
+  const hours = (now.getTime() - ts) / (1000 * 60 * 60);
+  const w = Math.exp(-Math.max(0, hours) / TIME_DECAY_TAU_HOURS);
   return Math.min(1.0, Math.max(0.2, w));
 }
 
