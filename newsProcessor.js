@@ -399,18 +399,21 @@ function clusterArticles(articles) {
       if (similarity > 0.6 && cluster.articles.length < MAX_CLUSTER_SIZE) {
         cluster.articles.push(articles[j]);
         cluster.totalScore += (articles[j].score || 0);
-        // 클러스터 평균 rating 계산
-        cluster.rating = Math.round(cluster.totalScore / cluster.articles.length / 20);
         processed.add(j);
       }
     }
 
+    // 클러스터 최종 점수 및 rating 계산
+    cluster.averageScore = cluster.totalScore / cluster.articles.length;
+    cluster.rating = Math.round(cluster.averageScore / 20);
+    cluster.score = cluster.averageScore; // API 호환성을 위해 score 필드도 추가
+    
     clusters.push(cluster);
     processed.add(i);
   }
 
-  // 점수순 정렬 (score 기준)
-  return clusters.sort((a, b) => b.totalScore - a.totalScore);
+  // 점수순 정렬 (averageScore 기준)
+  return clusters.sort((a, b) => b.averageScore - a.averageScore);
 }
 
 function calculateTitleSimilarity(title1, title2) {
