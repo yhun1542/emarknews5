@@ -841,175 +841,181 @@ async function fetchFromRSS(urls, maxItemsPerFeed = 10, sourceLang = undefined) 
     return items;
 }
 
+/* API 호출 함수 */
+async function fetchFromApis(section, lang) {
+  const items = [];
+  
+  // NewsAPI 호출
+  if (newsApiKey) {
+    try {
+      const newsApiItems = await fetchFromNewsAPI(section, lang);
+      items.push(...newsApiItems);
+    } catch (e) {
+      console.warn("NewsAPI 호출 실패:", e.message);
+    }
+  }
+  
+  // Naver API 호출 (한국어인 경우)
+  if (lang === 'ko' && NAVER_CLIENT_ID && NAVER_CLIENT_SECRET) {
+    try {
+      const naverItems = await fetchFromNaverAPI(section === 'korea' ? '주요 뉴스' : section);
+      items.push(...naverItems);
+    } catch (e) {
+      console.warn("Naver API 호출 실패:", e.message);
+    }
+  }
+  
+  return items;
+}
+
+/* RSS 폴백 함수 */
+async function fetchFromRss(rssUrls) {
+  const items = [];
+  const parser = new RSSParser();
+  
+  for (const url of rssUrls) {
+    try {
+      const feed = await parser.parseURL(url);
+      const rssItems = feed.items.map(item => ({
+        title: item.title,
+        description: item.contentSnippet || item.summary,
+        url: item.link,
+        publishedAt: item.pubDate,
+        source: { name: feed.title || 'RSS Feed' },
+        urlToImage: item.enclosure?.url || null
+      }));
+      items.push(...rssItems);
+    } catch (e) {
+      console.warn(`RSS 파싱 실패 (${url}):`, e.message);
+    }
+  }
+  
+  return items;
+}
+
+/* 데이터 필터링 함수 */
+function filterItems(items, freshness = 48, domainCap = 50) {
+  if (!items || !Array.isArray(items)) return [];
+  
+  const now = new Date();
+  const freshnessMs = freshness * 60 * 60 * 1000; // 시간을 밀리초로 변환
+  
+  return items
+    .filter(item => {
+      // 시간 필터링
+      if (item.publishedAt) {
+        const publishedTime = new Date(item.publishedAt);
+        if (now - publishedTime > freshnessMs) return false;
+      }
+      
+      // 기본 필드 검증
+      return item.title && item.url;
+    })
+    .slice(0, domainCap); // 개수 제한
+}
+
 
 /* 섹션별 기사 수집 로직 (재설계) */
 async function fetchArticlesForSection(section, freshness, domainCap, lang) {
   let items = [];
+  
+  // RSS URLs 정의
+  const rssUrls = [
+    'https://feeds.cnn.com/rss/edition.rss',
+    'https://feeds.bbci.co.uk/news/rss.xml',
+    'https://www.ft.com/rss/home'
+  ];
+  
   try {
-    items = await fetchFromApis(section, lang);  // NewsAPI/Naver/X 등 API 호출 (e.g., NewsAPI for world/business, Naver for kr, Japan RSS for japan)
+    items = await fetchFromApis(section, lang);  // NewsAPI/Naver/X 등 API 호출
     if (items.length > 0) return filterItems(items, freshness, domainCap);  // 성공 시 반환
   } catch (e) { console.error("API error:", e); }
+  
   // RSS fallback
   try {
     items = await fetchFromRss(rssUrls);
   } catch (e) { console.error("RSS fallback error:", e); }
+  
   return filterItems(items, freshness, domainCap);  // 48시간 이내, 점수/태그 추가 로직
-
-  console.log(`ℹ️ Fetching articles for section: ${section}`);
-
-  switch (section) {
-    case "world":
-      // 주력: NewsAPI (영어권 주요 국가)
-      items = await fetchFromNewsAPI({ language: 'en' });
-
-      // 보조: 주요 외신 RSS (BBC, Reuters 등)
-      const worldRss = [
-        "https://rss.cnn.com/rss/edition.rss",
-        "https://feeds.bbci.co.uk/news/world/rss.xml",
-        "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
-      ];
-      const rssItemsWorld = await fetchFromRSS(worldRss, 5, 'en');
-      items.push(...rssItemsWorld);
-      break;
-
-    case "kr":
-      // 주력: Naver API (NewsAPI 사용 금지 조건 반영)
-      items = await fetchFromNaverAPI("주요 뉴스");
-
-      // 보조: 국내 주요 언론사 RSS
-      const krRss = [
-        "https://rss.donga.com/total.xml",
-        "http://rss.joins.com/joins_news_list.xml",
-        "https://www.yonhapnewstv.co.kr/browse/feed/"
-      ];
-      const rssItemsKr = await fetchFromRSS(krRss, 5, 'ko');
-      items.push(...rssItemsKr);
-      break;
-
-    case "japan":
-      // 주력: NewsAPI (Country: jp, Language: ja)
-      items = await fetchFromNewsAPI({ country: 'jp', language: 'ja' });
-
-      // 보조: 일본 주요 언론사 RSS (Naver API 사용 금지 조건 반영)
-      const jpRss = [
-        "http://rss.asahi.com/rss/asahi/newsheadlines.rdf",
-        "http://www3.nhk.or.jp/rss/news/cat0.xml",
-        "https://www.japantimes.co.jp/feed/"
-      ];
-      const rssItemsJp = await fetchFromRSS(jpRss, 5, 'ja');
-      items.push(...rssItemsJp);
-      break;
-
-    case "buzz":
-      // 'Buzz' 섹션은 특정 소스보다는 화제성이 높은 기사를 모아야 합니다.
-      // 글로벌 및 주요 국가의 기사를 대량으로 수집한 후, 클러스터링 단계에서 Buzz 점수로 필터링합니다.
-      const buzzWorld = await fetchFromNewsAPI({ language: 'en', pageSize: 50, sortBy: 'popularity' });
-      const buzzKr = await fetchFromNaverAPI("실시간 인기 뉴스", 30);
-      const buzzJp = await fetchFromNewsAPI({ language: 'ja', country: 'jp', pageSize: 30, sortBy: 'popularity' });
-      items.push(...buzzWorld, ...buzzKr, ...buzzJp);
-      // 실제 필터링은 /feed 엔드포인트에서 처리
-      break;
-
-    case "youtube":
-      if (YOUTUBE_API_KEY) {
-        try {
-          const response = await axios.get('https://www.googleapis.com/youtube/v3/search', {
-            params: {
-              part: 'snippet',
-              q: 'breaking news live OR 속보',
-              type: 'video',
-              order: 'date',
-              maxResults: 15,
-              key: YOUTUBE_API_KEY
-            }
-          });
-          const youtubeItems = response.data.items.map(item => ({
-            title: item.snippet.title,
-            url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
-            publishedAt: item.snippet.publishedAt,
-            summary: item.snippet.description,
-            source: 'youtube.com',
-            sourceLang: 'en' // 기본값 영어로 설정
-          }));
-          items.push(...youtubeItems);
-        } catch (e) {
-          console.error('❌ YouTube API error:', e.message);
-        }
-      }
-      break;
-
-    // Business, Tech 등 기타 유효한 NewsAPI 카테고리
-    default:
-      if (['business', 'technology', 'science', 'health', 'sports', 'entertainment', 'tech'].includes(section)) {
-        const category = section === 'tech' ? 'technology' : section;
-        // 기본적으로 영어 기사 수집
-        items = await fetchFromNewsAPI({ category: category, language: 'en' });
-      } else {
-        console.warn(`⚠️ Unknown or unhandled section: ${section}`);
-      }
-      break;
-  }
-
-  // 후처리 (시간 필터링, 도메인 캡, 중복 제거)
-  // 48시간 이내 기사만 허용 (요구사항 반영)
-  const effectiveFreshness = Math.min(freshness, 48);
-  const minTs = NOW() - effectiveFreshness * HOUR;
-
-  // 1. 시간 필터링
-  items = items.filter(item => {
-    if (!item.publishedAt) return false;
-    const ts = Date.parse(item.publishedAt);
-    return Number.isFinite(ts) && ts >= minTs;
-  });
-
-  // 2. 도메인 캡
-  if (domainCap > 0) {
-    const domainCount = {};
-    items = items.filter(item => {
-      const domain = getDomain(item.url);
-      if (!domain) return true; // 도메인 파싱 실패 시 유지
-      domainCount[domain] = (domainCount[domain] || 0) + 1;
-      return domainCount[domain] <= domainCap;
-    });
-  }
-
-  // 3. 중복 제거 (URL 기준)
-  const uniqueItems = Array.from(new Map(items.map(item => [item.url, item])).values());
-
-  console.log(`ℹ️ Total unique articles fetched: ${uniqueItems.length}`);
-  return uniqueItems;
 }
 
-// 웹 스크래핑 함수 (기사 전문 추출용)
-async function safeFetchArticleContent(url) {
-  if (!url) return null;
+/* 기사 수집 함수들 */
+async function fetchFromNewsAPI(section, lang) {
+  if (!newsApiKey) return [];
+  
   try {
-    const response = await axios.get(url, {
-        timeout: 8000,
-        headers: {
-            // 봇 차단 방지를 위한 User-Agent 설정
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
-        }
-    });
-    const $ = cheerio.load(response.data);
-
-    // 네이버 뉴스 본문 추출 로직 (특수 케이스)
-    if (getDomain(url) === 'naver.com') {
-        let content = $('#dic_area').text() || $('#articeBody').text() || $('article').text();
-        return content.trim().replace(/\s+/g, ' ').slice(0, 5000); // 공백 정규화 및 길이 제한
+    const params = {
+      apiKey: newsApiKey,
+      pageSize: 20,
+      language: lang || 'en'
+    };
+    
+    // 섹션에 따른 파라미터 설정
+    if (section === 'world') {
+      params.category = 'general';
+    } else if (['business', 'technology', 'science', 'health', 'sports', 'entertainment'].includes(section)) {
+      params.category = section;
+    } else {
+      params.q = section;
     }
-
-    // 일반적인 본문 추출 로직
-    $('script, style, nav, footer, aside, iframe, header, noscript').remove();
-    // 'article' 태그나 'body'에서 텍스트 추출
-    let content = $('article').text() || $('body').text();
-
-    // 과도한 공백 제거 및 길이 제한
-    return content.trim().replace(/\s+/g, ' ').slice(0, 5000);
-
+    
+    const response = await axios.get('https://newsapi.org/v2/top-headlines', { params });
+    return response.data.articles || [];
   } catch (e) {
-    console.error(`❌ Safe fetch error for ${url}:`, e.message);
-    return null;
+    console.error('NewsAPI 오류:', e.message);
+    return [];
+  }
+}
+
+async function fetchFromNaverAPI(query, limit = 20) {
+  if (!NAVER_CLIENT_ID || !NAVER_CLIENT_SECRET) return [];
+  
+  try {
+    const response = await axios.get('https://openapi.naver.com/v1/search/news.json', {
+      params: { query, display: limit, sort: 'date' },
+      headers: {
+        'X-Naver-Client-Id': NAVER_CLIENT_ID,
+        'X-Naver-Client-Secret': NAVER_CLIENT_SECRET
+      }
+    });
+    
+    return response.data.items.map(item => ({
+      title: item.title.replace(/<[^>]*>/g, ''),
+      description: item.description.replace(/<[^>]*>/g, ''),
+      url: item.link,
+      publishedAt: item.pubDate,
+      source: { name: 'Naver News' }
+    }));
+  } catch (e) {
+    console.error('Naver API 오류:', e.message);
+    return [];
+  }
+}
+
+/* 뉴스 피드 생성 함수 */
+async function generateFeed(section, freshness, domainCap, lang, quality) {
+  try {
+    // 1. 기사 수집
+    let items = await fetchArticlesForSection(section, freshness, domainCap, lang);
+    
+    if (items.length === 0) {
+      return { articles: [], clusters: [], meta: { total: 0, section, lang } };
+    }
+    
+    // 2. 기본 메타데이터 반환
+    return {
+      articles: items,
+      clusters: [],
+      meta: {
+        total: items.length,
+        section,
+        lang,
+        generated_at: new Date().toISOString()
+      }
+    };
+  } catch (e) {
+    console.error('Feed 생성 오류:', e.message);
+    throw new Error('FEED_GENERATION_FAILED');
   }
 }
 
