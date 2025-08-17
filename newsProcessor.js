@@ -177,7 +177,26 @@ function sourceWeight(url) {
 /* 뉴스 수집 함수들 */
 const { fetchArticlesForSection: fetchArticlesWithFallback } = require('./services/fetchArticles');
 
-/* AI 요약 함수 */
+/* 지능형 재시도 헬퍼 함수 */
+const openaiRequestWithRetry = async (payload, attempt = 1) => {
+  const MAX_ATTEMPTS = parseInt(process.env.AI_RETRY_ATTEMPTS, 10) || 3;
+  try {
+    // 실제 OpenAI API 호출 부분
+    return await openai.chat.completions.create(payload);
+  } catch (error) {
+    if (error.status === 429 && attempt <= MAX_ATTEMPTS) {
+      const waitSeconds = Math.pow(2, attempt);
+      console.warn(`🔄 [OpenAI] 429 Rate Limit. ${waitSeconds}초 후 재시도합니다... (시도 ${attempt}/${MAX_ATTEMPTS})`);
+      await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+      return openaiRequestWithRetry(payload, attempt + 1);
+    } else {
+      // 재시도를 초과했거나 다른 종류의 에러일 경우, 에러를 던져서 상위 로직이 처리하게 함
+      throw error;
+    }
+  }
+};
+
+/* AI 요약 함수 (개선된 버전) */
 async function generateAISummary(text, lang = 'en') {
   if (!openai || !text) return null;
   
@@ -186,13 +205,14 @@ async function generateAISummary(text, lang = 'en') {
       ? `다음 뉴스 기사를 3-4개의 핵심 포인트로 요약해주세요. 각 포인트는 한 줄로 작성하고 "•"로 시작하세요:\n\n${text}`
       : `Summarize the following news article into 3-4 key bullet points. Each point should be one line starting with "•":\n\n${text}`;
 
-    const response = await openai.chat.completions.create({
+    const payload = {
       model: OPENAI_MODEL,
       messages: [{ role: "user", content: prompt }],
       max_tokens: 200,
       temperature: 0.3
-    });
+    };
 
+    const response = await openaiRequestWithRetry(payload);
     return response.choices[0]?.message?.content?.trim() || null;
   } catch (error) {
     console.error('❌ [NewsProcessor] AI summary error:', error.message);
@@ -405,7 +425,89 @@ function calculateTitleSimilarity(title1, title2) {
   return union.length > 0 ? intersection.length / union.length : 0;
 }
 
-/* 메인 처리 함수 */
+/* 배치 처리 상수 */
+const BATCH_SIZE = parseInt(process.env.AI_BATCH_SIZE, 10) || 10;
+const CACHE_TTL = parseInt(process.env.AI_CACHE_TTL_SECONDS, 10) || 86400;
+
+/* 지능형 AI 배치 처리 함수 */
+async function processArticlesWithAI(articles) {
+  const processedArticles = [];
+  
+  for (let i = 0; i < articles.length; i += BATCH_SIZE) {
+    const batch = articles.slice(i, i + BATCH_SIZE);
+    console.log(`🔄 [AI Processor] AI 요약 배치 처리 시작: ${i + 1}-${i + batch.length} / ${articles.length}`);
+
+    const batchPromises = batch.map(async (article) => {
+      const cacheKey = `ai_summary:${Buffer.from(article.link || article.url || article.title).toString('base64').slice(0, 50)}`;
+
+      // 1. 캐시 확인
+      try {
+        const cachedSummary = await redisClient.get(cacheKey);
+        if (cachedSummary) {
+          console.log(`⚡️ [Cache HIT] '${article.title?.slice(0, 30)}...'의 AI 요약을 캐시에서 가져옵니다.`);
+          article.aiSummary = cachedSummary;
+          return article;
+        }
+      } catch (cacheError) {
+        console.warn(`⚠️ [Cache] 캐시 조회 실패: ${cacheError.message}`);
+      }
+
+      // 2. 캐시가 없으면 API 호출 (재시도 로직 포함)
+      try {
+        const textToSummarize = article.content || article.summary || article.description || '';
+        if (!textToSummarize || textToSummarize.length < 50) {
+          article.aiSummary = null;
+          return article;
+        }
+
+        const prompt = article.sourceLang === 'ko' 
+          ? `다음 뉴스 기사를 3-4개의 핵심 포인트로 요약해주세요. 각 포인트는 한 줄로 작성하고 "•"로 시작하세요:\n\n${textToSummarize}`
+          : `Summarize the following news article into 3-4 key bullet points. Each point should be one line starting with "•":\n\n${textToSummarize}`;
+
+        const payload = {
+          model: OPENAI_MODEL,
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 200,
+          temperature: 0.3
+        };
+
+        const response = await openaiRequestWithRetry(payload);
+        const summary = response.choices[0]?.message?.content?.trim() || null;
+
+        article.aiSummary = summary;
+
+        // 3. 성공 시 결과 캐싱
+        if (summary) {
+          try {
+            await redisClient.setex(cacheKey, CACHE_TTL, summary);
+            console.log(`💾 [Cache SAVE] '${article.title?.slice(0, 30)}...' AI 요약 캐시 저장 완료`);
+          } catch (cacheError) {
+            console.warn(`⚠️ [Cache] 캐시 저장 실패: ${cacheError.message}`);
+          }
+        }
+
+        return article;
+
+      } catch (error) {
+        console.error(`🚨 [AI Processor] '${article.title?.slice(0, 30)}...' 요약 최종 실패:`, error.message);
+        article.aiSummary = null; // 실패 시 null로 설정
+        return article;
+      }
+    });
+
+    const results = await Promise.all(batchPromises);
+    processedArticles.push(...results);
+    
+    // 배치 간 잠시 대기 (Rate Limit 방지)
+    if (i + BATCH_SIZE < articles.length) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+  
+  return processedArticles;
+}
+
+/* 메인 처리 함수 (배치 처리 적용) */
 async function fetchAndProcessNewsForAllSections() {
   const sections = ['world', 'korea', 'business', 'japan', 'buzz'];
   const results = {};
@@ -425,24 +527,27 @@ async function fetchAndProcessNewsForAllSections() {
         console.log(`📝 [VERBOSE] Collected ${rawArticles.length} articles for ${section}`);
       }
       
-      // 기사 처리 (AI 요약, 번역 등)
-      const processedArticles = [];
+      // 기사 기본 처리 (점수 계산, 번역 등 - AI 요약 제외)
+      const basicProcessedArticles = [];
       for (const article of rawArticles.slice(0, 50)) { // 최대 50개 처리
-        const processed = await processArticle(article, 'ko');
-        processedArticles.push(processed);
+        const processed = await processSingleArticle(article);
+        basicProcessedArticles.push(processed);
       }
       
+      // AI 요약 배치 처리
+      const fullyProcessedArticles = await processArticlesWithAI(basicProcessedArticles);
+      
       // 클러스터링
-      const clusters = clusterArticles(processedArticles);
+      const clusters = clusterArticles(fullyProcessedArticles);
       
       results[section] = {
-        articles: processedArticles.slice(0, 20), // 최대 20개 반환
+        articles: fullyProcessedArticles.slice(0, 20), // 최대 20개 반환
         clusters: clusters.slice(0, 10), // 최대 10개 클러스터
         lastUpdated: new Date().toISOString(),
         totalProcessed: rawArticles.length
       };
       
-      console.log(`✅ [NewsProcessor] ${section}: ${processedArticles.length} articles processed, ${clusters.length} clusters created`);
+      console.log(`✅ [NewsProcessor] ${section}: ${fullyProcessedArticles.length} articles processed, ${clusters.length} clusters created`);
       
     } catch (error) {
       console.error(`❌ [NewsProcessor] Error processing ${section}:`, error.message);
