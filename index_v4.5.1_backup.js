@@ -1,5 +1,5 @@
 /*
- * EmarkNews — 업그레이드 백엔드 (v4.5.2: v4.5.1 기반 + API 호출 오류 로깅 강화)
+ * EmarkNews — 업그레이드 백엔드 (v4.5.1: v4.4 기반 + cacheControl 누락 해결 최종 안정화 패치)
  */
 
 "use strict";
@@ -793,17 +793,7 @@ async function fetchFromNaverAPI(query = "주요 뉴스", display = 40) {
       }
       return [];
     } catch (e) {
-      // [v4.5.2] 상세 오류 로그 추가
-      if (e.response) {
-        console.error(`❌ Naver API Error: Status ${e.response.status} - ${e.response.data?.errorMessage || e.response.statusText}`);
-        if (e.response.status === 401) {
-          console.error("-> Hint: NAVER_CLIENT_ID or NAVER_CLIENT_SECRET might be invalid.");
-        } else if (e.response.status === 429) {
-          console.error("-> Hint: API rate limit exceeded. Consider reducing request frequency.");
-        }
-      } else {
-        console.error(`❌ Naver API Network Error: ${e.message}`);
-      }
+      console.error(`❌ Naver API error:`, e.response ? `${e.response.status} ${e.response.statusText}` : e.message);
       return [];
     }
 }
@@ -837,14 +827,9 @@ async function fetchFromNewsAPI(params) {
         }
         return [];
     } catch (e) {
-        // [v4.5.2] 상세 오류 로그 추가 (NewsAPI 라이브러리는 e.message에 상세정보 포함)
-        console.error(`❌ NewsAPI Helper Error: ${e.message}`);
-        if (e.message.includes('401')) {
-            console.error("-> Hint: The NEWS_API_KEY might be invalid or expired.");
-        } else if (e.message.includes('rateLimit') || e.message.includes('429')) {
-            console.error('-> Hint: NewsAPI Rate limit exceeded. Consider upgrading your plan.');
-        } else if (e.message.includes('400')) {
-            console.error('-> Hint: Invalid request parameters. Check country/language codes.');
+        console.error(`❌ NewsAPI Helper Error:`, e.message);
+        if (e.message.includes('rateLimit')) {
+             console.error('⚠️ NewsAPI Rate limit exceeded.');
         }
         return [];
     }
@@ -866,13 +851,7 @@ async function fetchFromRSS(urls, maxItemsPerFeed = 10, sourceLang = undefined) 
             }));
             items.push(...feedItems);
         } catch (e) {
-            // [v4.5.2] RSS 피드 오류 로깅 강화
-            console.error(`❌ RSS fetch error for ${url}: ${e.message}`);
-            if (e.message.includes('ENOTFOUND') || e.message.includes('ECONNREFUSED')) {
-                console.error(`-> Hint: RSS feed ${url} might be unreachable or domain not found.`);
-            } else if (e.message.includes('timeout')) {
-                console.error(`-> Hint: RSS feed ${url} request timed out. Server might be slow.`);
-            }
+            console.error(`❌ RSS fetch error for ${url}:`, e.message);
         }
     }
     return items;
@@ -1219,7 +1198,7 @@ app.get("/healthz", (_req, res) => {
     env:NODE_ENV,
     uptime:process.uptime(),
     time:new Date().toISOString(),
-    version:"4.5.2"
+    version:"4.5.1"
   });
 });
 
@@ -1232,7 +1211,7 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   // Railway 환경에서는 0.0.0.0으로 리스닝해야 함
-app.listen(process.env.PORT || 8080, "0.0.0.0", () => console.log(`✅ [UPGRADED v4.5.2] Server listening on :${process.env.PORT || 8080}`));
+app.listen(process.env.PORT || 8080, "0.0.0.0", () => console.log(`✅ [UPGRADED v4.5.1] Server listening on :${process.env.PORT || 8080}`));
 }
 
 module.exports = {
