@@ -1068,108 +1068,48 @@ async function fetchFromRSS(urls, maxItemsPerFeed = 10, sourceLang = undefined) 
 }
 
 
-/* 섹션별 기사 수집 로직 */
+/* 다중 소스 폴백 시스템 import */
+const { fetchArticlesForSection: fetchArticlesWithFallback } = require('./services/fetchArticles');
+
+/* 섹션별 기사 수집 로직 (다중 소스 폴백 시스템) */
 async function fetchArticlesForSection(section, freshness, domainCap, lang) {
-  let items = [];
+  if (isDebug) {
+    console.log(`🔍 [DEBUG-P1] Starting article collection for section: ${section}`);
+  }
 
-  console.log(`ℹ️ Fetching articles for section: ${section}`);
+  // 새로운 다중 소스 폴백 시스템 사용
+  let items = await fetchArticlesWithFallback(section);
 
-  switch (section) {
-    case "world":
-      // 주력: NewsAPI (영어권 주요 국가)
-      items = await fetchFromNewsAPI({ language: 'en' });
-
-      // 보조: 주요 외신 RSS (BBC, Reuters 등)
-      const worldRss = [
-        "http://feeds.reuters.com/reuters/topNews",
-        "https://feeds.bbci.co.uk/news/world/rss.xml",
-        "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
-      ];
-      const rssItemsWorld = await fetchFromRSS(worldRss, 5, 'en');
-      items.push(...rssItemsWorld);
-      break;
-
-    case "korea":
-    case "kr":
-      // 주력: Naver API (NewsAPI 사용 금지 조건 반영)
-      items = await fetchFromNaverAPI("주요 뉴스");
-
-      // 보조: 국내 주요 언론사 RSS
-      const krRss = [
-        "https://rss.donga.com/total.xml",
-        "http://rss.joins.com/joins_news_list.xml",
-        "https://www.yonhapnewstv.co.kr/browse/feed/"
-      ];
-      const rssItemsKr = await fetchFromRSS(krRss, 5, 'ko');
-      items.push(...rssItemsKr);
-      break;
-
-    case "japan":
-      // 주력: NewsAPI (Country: jp, Language: ja)
-      items = await fetchFromNewsAPI({ country: 'jp', language: 'ja' });
-
-      // 보조: 일본 주요 언론사 RSS (Naver API 사용 금지 조건 반영)
-      const jpRss = [
-        "http://rss.asahi.com/rss/asahi/newsheadlines.rdf",
-        "http://www3.nhk.or.jp/rss/news/cat0.xml",
-        "https://www.japantimes.co.jp/feed/"
-      ];
-      const rssItemsJp = await fetchFromRSS(jpRss, 5, 'ja');
-      items.push(...rssItemsJp);
-      break;
-
-    case "buzz":
-      // 글로벌 및 주요 국가의 기사를 대량으로 수집한 후, 클러스터링 단계에서 Buzz 점수로 필터링합니다.
-      const buzzWorld = await fetchFromNewsAPI({ language: 'en', pageSize: 50, sortBy: 'popularity' });
-      const buzzKr = await fetchFromNaverAPI("실시간 인기 뉴스", 30);
-      const buzzJp = await fetchFromNewsAPI({ language: 'ja', country: 'jp', pageSize: 30, sortBy: 'popularity' });
-      items.push(...buzzWorld, ...buzzKr, ...buzzJp);
-      // 실제 필터링은 /feed 엔드포인트에서 처리
-      break;
-
-    case "youtube":
-      if (YOUTUBE_API_KEY) {
-        try {
-          const response = await axios.get('https://www.googleapis.com/youtube/v3/search', {
-            params: {
-              part: 'snippet',
-              q: 'breaking news live OR 속보',
-              type: 'video',
-              order: 'date',
-              maxResults: 15,
-              key: YOUTUBE_API_KEY
-            }
-          });
-          const youtubeItems = response.data.items.map(item => ({
-            title: item.snippet.title,
-            url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
-            publishedAt: item.snippet.publishedAt,
-            summary: item.snippet.description,
-            source: 'youtube.com',
-            sourceLang: 'en' // 기본값 영어로 설정 (제목 기반 추후 판단 가능)
-          }));
-          items.push(...youtubeItems);
-        } catch (e) {
-          console.error('❌ YouTube API error:', e.message);
+  // YouTube 섹션은 별도 처리 (기존 로직 유지)
+  if (section === "youtube" && YOUTUBE_API_KEY) {
+    try {
+      const response = await axios.get('https://www.googleapis.com/youtube/v3/search', {
+        params: {
+          part: 'snippet',
+          q: 'breaking news live OR 속보',
+          type: 'video',
+          order: 'date',
+          maxResults: 15,
+          key: YOUTUBE_API_KEY
         }
-      }
-      break;
-
-    // Business, Tech 등 기타 유효한 NewsAPI 카테고리
-    default:
-      if (['business', 'technology', 'science', 'health', 'sports', 'entertainment', 'tech'].includes(section)) {
-        const category = section === 'tech' ? 'technology' : section;
-        // 기본적으로 영어 기사 수집
-        items = await fetchFromNewsAPI({ category: category, language: 'en' });
-      } else {
-        console.warn(`⚠️ Unknown or unhandled section: ${section}`);
-      }
-      break;
+      });
+      const youtubeItems = response.data.items.map(item => ({
+        title: item.snippet.title,
+        url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
+        publishedAt: item.snippet.publishedAt,
+        summary: item.snippet.description,
+        source: 'youtube.com',
+        sourceLang: 'en'
+      }));
+      items.push(...youtubeItems);
+    } catch (e) {
+      console.error('❌ YouTube API error:', e.message);
+    }
   }
 
   // 후처리 (시간 필터링, 도메인 캡, 중복 제거)
   // 48시간 이내 기사만 허용
-  const effectiveFreshness = Math.min(freshness, 48);
+  const effectiveFreshness = Math.min(freshness || 48, 48);
   const minTs = NOW() - effectiveFreshness * HOUR;
 
   // 1. 시간 필터링
@@ -1180,10 +1120,10 @@ async function fetchArticlesForSection(section, freshness, domainCap, lang) {
   });
 
   // 2. 도메인 캡
-  if (domainCap > 0) {
+  if (domainCap && domainCap > 0) {
     const domainCount = {};
     items = items.filter(item => {
-      const domain = getDomain(item.url);
+      const domain = getDomain(item.url || item.link);
       if (!domain) return true; // 도메인 파싱 실패 시 유지
       domainCount[domain] = (domainCount[domain] || 0) + 1;
       return domainCount[domain] <= domainCap;
@@ -1191,9 +1131,12 @@ async function fetchArticlesForSection(section, freshness, domainCap, lang) {
   }
 
   // 3. 중복 제거 (URL 기준)
-  const uniqueItems = Array.from(new Map(items.map(item => [item.url, item])).values());
+  const uniqueItems = Array.from(new Map(items.map(item => [(item.url || item.link), item])).values());
 
-  console.log(`ℹ️ Total unique articles fetched: ${uniqueItems.length}`);
+  if (isDebug) {
+    console.log(`🔍 [DEBUG-P1] Article collection completed: ${uniqueItems.length} unique articles`);
+  }
+  
   return uniqueItems;
 }
 

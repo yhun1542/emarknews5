@@ -1,11 +1,12 @@
 {
   "name": "emarknews5-backend",
-  "version": "4.6.1",
-  "description": "EmarkNews AI Powered News Aggregator Backend",
+  "version": "4.7.0",
+  "description": "EmarkNews AI Powered News Aggregator Backend with Multi-Source Fallback System",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "diagnose": "./diagnostics_and_cleanup.sh"
   },
   "repository": {
     "type": "git",
