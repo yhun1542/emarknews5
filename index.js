@@ -900,6 +900,7 @@ async function fetchArticlesForSection(section, freshness, domainCap, lang) {
       items.push(...rssItemsWorld);
       break;
 
+    case "korea":
     case "kr":
       // 주력: Naver API (NewsAPI 사용 금지 조건 반영)
       items = await fetchFromNaverAPI("주요 뉴스");
