@@ -909,7 +909,7 @@ async function safeFetchArticleContent(url) {
 /* 라우팅 및 미들웨어 (v4.3.1: 순서 최적화 적용) */
 // --- 1. API 엔드포인트 (최우선 처리) ---
 // 메인 피드 엔드포인트
-app.get("/feed", cacheControl, async (req, res) => {
+app.get("/feed", async (req, res) => {
   // [v4.5] 성능 추적 시작
   const startTime = Date.now();
   console.time(`📊 Feed generation (${req.query.section || 'world'})`);
