@@ -1214,9 +1214,10 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   // Railway 환경에서는 0.0.0.0으로 리스닝해야 함
-  app.listen(PORT, '0.0.0.0', () => console.log(`✅ [UPGRADED v4.3] Server listening on :${PORT}`));
+app.listen(process.env.PORT || 8080, "0.0.0.0", () => console.log(`✅ [UPGRADED v4.3] Server listening on :${process.env.PORT || 8080}`));
 }
 
 module.exports = {
   app
 };
+process.on("warning", (warning) => { if (warning.name === "DeprecationWarning") console.warn("Ignored deprecation:", warning.message); });
