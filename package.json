@@ -13,6 +13,10 @@
   },
   "author": "EmarkNews Team",
   "license": "ISC",
+  "engines": {
+    "node": ">=20.18.1",
+    "npm": ">=10.0.0"
+  },
   "dependencies": {
     "@google-cloud/translate": "^8.0.0",
     "axios": "^1.6.0",
