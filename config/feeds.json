@@ -1,38 +1,26 @@
 {
   "world": [
-    { "name": "Associated Press World", "url": "https://rsshub.app/ap/world" },
-    { "name": "BBC World", "url": "http://feeds.bbci.co.uk/news/world/rss.xml" },
+    { "name": "NPR World", "url": "https://feeds.npr.org/1004/rss.xml" },
     { "name": "Reuters World", "url": "https://feeds.reuters.com/reuters/worldNews" },
-    { "name": "CNN World", "url": "http://rss.cnn.com/rss/edition.rss" },
-    { "name": "NPR World", "url": "https://feeds.npr.org/1004/rss.xml" }
+    { "name": "CNN World", "url": "http://rss.cnn.com/rss/edition.rss" }
   ],
   "business": [
-    { "name": "Financial Times", "url": "https://www.ft.com/rss/home" },
     { "name": "NPR Business", "url": "https://feeds.npr.org/1006/rss.xml" },
     { "name": "Reuters Business", "url": "https://feeds.reuters.com/reuters/businessNews" },
-    { "name": "BBC Business", "url": "http://feeds.bbci.co.uk/news/business/rss.xml" },
     { "name": "MarketWatch", "url": "http://feeds.marketwatch.com/marketwatch/topstories/" }
   ],
   "korea": [
     { "name": "Yonhap News Agency", "url": "https://www.yonhapnewstv.co.kr/browse/feed/" },
-    { "name": "KBS News", "url": "http://world.kbs.co.kr/rss/rss_news.htm?lang=k" },
-    { "name": "Chosun Ilbo", "url": "http://www.chosun.com/site/data/rss/rss.xml" },
-    { "name": "JoongAng Daily", "url": "https://koreajoongangdaily.joins.com/rss/allArticle.xml" },
     { "name": "Korea Herald", "url": "http://www.koreaherald.com/rss/020000000000.xml" }
   ],
   "japan": [
-    { "name": "NHK World News", "url": "https://www.nhk.or.jp/rss/news/cat0.xml" },
     { "name": "Japan Times", "url": "https://www.japantimes.co.jp/feed/" },
-    { "name": "Kyodo News", "url": "https://english.kyodonews.net/rss/news.xml" },
-    { "name": "Asahi Shimbun", "url": "http://www.asahi.com/rss/asahi/newsheadlines.rdf" },
-    { "name": "Mainichi Shimbun", "url": "https://mainichi.jp/english/rss/etc/english.rss" }
+    { "name": "Kyodo News", "url": "https://english.kyodonews.net/rss/news.xml" }
   ],
   "buzz": [
-    { "name": "Reddit World News", "url": "https://www.reddit.com/r/worldnews/.rss" },
-    { "name": "Hacker News", "url": "https://hnrss.org/frontpage" },
     { "name": "TechCrunch", "url": "https://techcrunch.com/feed/" },
-    { "name": "Mashable", "url": "http://feeds.mashable.com/Mashable" },
-    { "name": "The Verge", "url": "https://www.theverge.com/rss/index.xml" }
+    { "name": "The Verge", "url": "https://www.theverge.com/rss/index.xml" },
+    { "name": "Hacker News", "url": "https://hnrss.org/frontpage" }
   ]
 }
 
