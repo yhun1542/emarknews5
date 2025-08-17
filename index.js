@@ -1,5 +1,5 @@
 /*
- * EmarkNews — 업그레이드 백엔드 (v4.3: API 중심 아키텍처, 안정성 패치, 언어 강제 적용 로직 포함)
+ * EmarkNews — 업그레이드 백엔드 (v4.4: 정렬 로직, AI 프롬프트, 데이터 소스, UI 지원 강화)
  */
 
 "use strict";
@@ -560,8 +560,8 @@ async function clusterArticles(articles, lang, quality = "low") {
     await enrichCluster(c, lang);
   }
 
-  // 최종 정렬: 점수(Score) 기준 내림차순
-  clusters.sort((a,b)=>b.score-a.score);
+  // [v4.4 Patch] 최종 정렬: score 대신 rating(별점) 기준으로 정렬
+  clusters.sort((a,b)=>b.rating-a.rating);
 
   // [v4.2 Patch] 최종 매핑: publishedAtAvg 변환 시 크래시 방지 (Invalid Time Value 해결)
   return clusters.map(c => ({
@@ -621,38 +621,36 @@ async function generateAiSummary(article, format = "bullet", model = OPENAI_MODE
 
     let prompt;
     if (format === "bullet") {
-        // 카드 뷰용: 3개의 간결한 불릿 포인트 (Middot 사용)
+        // 카드 뷰용: 3개의 간결한 불릿 포인트
         prompt = `Summarize the following news article into exactly 3 concise bullet points. Use the Middot character (·) as the bullet. Focus on the most critical facts and implications. Do NOT use ellipses (...).
 
 Input:
 ${inputText.slice(0, 2500)}
 
 Output (3 bullets starting with ·):`;
-    } else {
-        // 모달 뷰용: 상세한 요약
-        prompt = `Provide a detailed summary of the following news article. Cover all key facts, figures, events, and implications comprehensively. Use Middot characters (·) for bullet points if appropriate for clarity. The summary should be thorough. Do NOT use ellipses (...).
+    } else { // format === "modal"
+        // 모달 뷰용: 핵심 요약 프롬프트
+        prompt = `Analyze the following news article and extract only the most critical information. Present it as a structured summary with a main point followed by key takeaways in bullet points (using ·). The entire summary must be concise enough to fit on a single screen without scrolling. Do not include minor details or ellipses (...).
 
 Input:
 ${inputText.slice(0, 4000)}
 
-Detailed Summary:`;
+Structured Summary:`;
     }
 
     try {
         const resp = await openai.chat.completions.create({
             model,
             messages: [{ role: "user", content: prompt }],
-            max_tokens: format === "bullet" ? 250 : 500,
-            temperature: 0.3
+            max_tokens: format === "bullet" ? 250 : 400, // 모달 요약 토큰 조정
+            temperature: 0.2
         });
-        const summary = resp.choices[0].message.content.trim();
+        let summary = resp.choices[0].message.content.trim();
 
-        // 불릿 포인트 형식 강제 (AI가 놓쳤을 경우 대비)
-        if (format === "bullet" && !summary.startsWith('·')) {
-            const lines = summary.split('.').filter(line => line.trim() !== '');
-            if (lines.length > 0) {
-                return lines.slice(0, 3).map(line => `· ${line.trim()}`).join('\n');
-            }
+        // AI가 프롬프트를 따르지 않았을 경우 후처리
+        if (format === "modal" && !summary.includes('·')) {
+             summary = summary.replace(/\. /g, '.\n· ');
+             if (!summary.startsWith('·')) summary = `· ${summary}`;
         }
 
         return summary || article.summary || article.description;
@@ -664,43 +662,37 @@ Detailed Summary:`;
 }
 
 async function processArticles(articles, lang, options = {}) {
-  // aiSummary 기본값 true로 설정
   const { aiSummary = true, quality } = options;
 
   return Promise.all(articles.map(async (article) => {
     // 1. AI 요약 생성 (카드 뷰용 불릿 포인트)
     if (aiSummary) {
-        // 원본 언어가 목표 언어와 같으면 AI 요약 생략 (예: 한국어 뉴스)
-        if (article.sourceLang === lang) {
-             article.aiSummaryBullet = article.summary || article.description;
-        } else {
-            article.aiSummaryBullet = await generateAiSummary(article, "bullet");
-            // 상세 요약은 필요시 생성 (예: quality=high일 때만)
-            if (quality === 'high') {
-                 article.aiSummaryDetailed = await generateAiSummary(article, "detailed");
-            }
+        // [v4.4] 국내 뉴스도 요약하도록 조건문 제거
+        article.aiSummaryBullet = await generateAiSummary(article, "bullet");
+        // 상세 요약은 Quality=High일 때만 생성
+        if (quality === 'high') {
+             article.aiSummaryDetailed = await generateAiSummary(article, "modal");
         }
     }
 
     const titleToTranslate = article.title;
-    // 요약은 AI 요약(불릿)을 우선 사용
     const summaryToTranslate = article.aiSummaryBullet || article.summary || article.description;
 
-    // 2. 번역 (Google Translate)
-    // 소스 언어와 목표 언어가 같으면 번역 생략
+    // 2. 번역 (소스 언어와 목표 언어가 같으면 생략)
     if (article.sourceLang === lang) {
         article.translatedTitle = titleToTranslate;
         article.translatedSummary = summaryToTranslate;
         return article;
     }
 
-    let translatedTitle = await translateText(titleToTranslate, lang);
-    let translatedSummary = await translateText(summaryToTranslate, lang);
-
-    // 3. AI 후편집 (LLM Post-Editing) - 현재 비활성화됨 (필요시 구현 추가)
-
-    article.translatedTitle = translatedTitle;
-    article.translatedSummary = translatedSummary; // 최종 번역된 요약 (불릿 형태)
+    article.translatedTitle = await translateText(titleToTranslate, lang);
+    article.translatedSummary = await translateText(summaryToTranslate, lang);
+    
+    // 상세 요약도 번역
+    if (article.aiSummaryDetailed) {
+        article.aiSummaryDetailed = await translateText(article.aiSummaryDetailed, lang);
+    }
+    
     return article;
   }));
 }
@@ -1102,14 +1094,19 @@ app.get("/feed", cacheControl, async (req, res) => {
     // 5. 클러스터링
     let clusters = await clusterArticles(items, lang, quality);
 
-    // 6. 'Buzz' 섹션 필터링 및 정렬
+    // [v4.4 Patch] Buzz 섹션 필터링 로직 완화 및 폴백 추가
+    let originalClusters = [...clusters];
     if (section === 'buzz') {
-        // Buzz 점수가 있거나(isBuzz=true) 긴급(isUrgent=true)하거나 레이팅이 높은 클러스터만 필터링
-        clusters = clusters.filter(c => c.isBuzz || c.isUrgent || c.rating >= 4.0);
-        // Buzz 섹션은 레이팅(화제성 반영됨) 기준으로 정렬
-        clusters.sort((a,b) => b.rating - a.rating);
+        clusters = clusters.filter(c => c.isBuzz || c.isUrgent);
+        // 필터링 후 기사가 없으면, 원본에서 점수 높은 순으로 대체
+        if (clusters.length === 0) {
+            console.log("⚠️ Buzz section empty after filtering, using top-rated fallback.");
+            clusters = originalClusters.sort((a, b) => b.rating - a.rating).slice(0, 30);
+        }
     }
-    // 일반 섹션은 clusterArticles 내부에서 Score 기준으로 이미 정렬됨.
+
+    // [v4.4 Patch] 최종 정렬: score 대신 rating(별점) 기준으로 정렬
+    clusters.sort((a, b) => b.rating - a.rating);
 
     // 7. 상위 결과 랜덤화 (새로고침 시 다양성 제공하면서 순위 유지)
     const TOP_N = 20;
