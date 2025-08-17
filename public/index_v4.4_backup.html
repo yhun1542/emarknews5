@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <style>
+        /* (대부분의 CSS는 이전과 동일) */
+        /* ... (생략) ... */
+
+        /* [v4.4 Patch] 카드 요약 Middot 간격 조정 */
+        .card-summary li {
+            margin-bottom: 6px; /* 간격 살짝 줄임 */
+            position: relative;
+            padding-left: 15px; /* 들여쓰기 공간 축소 */
+            text-indent: -15px; /* 내어쓰기 적용 */
+        }
+        .card-summary li::before {
+            content: "•";
+            color: var(--color-primary);
+            font-weight: bold;
+            display: inline-block;
+            width: 15px; /* 불릿 공간 축소 */
+        }
+
+        /* [v4.4 Patch] 모달 내 번역 탭 숨김을 위한 클래스 */
+        .modal-tab.hidden {
+            display: none;
+        }
+
+    </style>
+</head>
+<body>
+    <script>
+        // (BASE_URL, 전역 변수, 유틸리티 함수는 이전과 동일)
+        // ... (생략) ...
+
+        // [v4.4 Patch] 모달 열기 함수 수정
+        function openModal(cluster) {
+            const overlay = document.getElementById('modal-overlay');
+            const head = cluster.articles[0];
+            const lang = document.getElementById('lang').value;
+
+            document.getElementById('modal-title').textContent = head.translatedTitle || head.title;
+            // ... (모달 메타 정보 설정은 이전과 동일) ...
+
+            // [v4.4] 상세 요약 표시 (백엔드에서 생성된 aiSummaryDetailed 우선 사용)
+            const detailedSummary = head.aiSummaryDetailed || head.translatedSummary || head.summary;
+            const summaryHtml = detailedSummary.split('\n')
+                                               .filter(line => line.trim() !== '')
+                                               .map(line => `<p>${line.replace(/^[•·]\s*/, '').trim()}</p>`)
+                                               .join('');
+            document.getElementById('modal-summary-content').innerHTML = summaryHtml || '<p>상세 요약 정보가 없습니다.</p>';
+
+            // (관련 기사 목록 설정은 이전과 동일)
+            // ... (생략) ...
+
+            // [v4.4] 원문 번역 탭 조건부 표시
+            const translationTab = document.querySelector('.modal-tab[data-tab="translation"]');
+            if (head.sourceLang === 'ko') {
+                translationTab.classList.add('hidden'); // 한국 기사일 경우 숨김
+            } else {
+                translationTab.classList.remove('hidden'); // 그 외에는 표시
+                const translationEl = document.getElementById('modal-translation-content');
+                translationEl.innerHTML = '';
+                translationEl.dataset.loaded = 'false';
+                translationEl.dataset.url = head.url;
+                translationEl.dataset.lang = lang;
+            }
+
+            // (탭 이벤트, 액션 버튼 설정은 이전과 동일)
+            // ... (생략) ...
+            
+            // 기본 탭을 'AI 상세 요약'으로 설정
+            switchModalTab('summary');
+            overlay.classList.add('visible');
+        }
+
+        // [v4.4 Patch] 환율 정보 로드 함수 개선
+        async function fetchCurrency() {
+            const currencyDiv = document.getElementById('currency');
+            try {
+                const response = await fetch('[https://open.er-api.com/v6/latest/USD](https://open.er-api.com/v6/latest/USD)');
+                if (!response.ok) throw new Error(`API Error: ${response.status}`);
+                const data = await response.json();
+
+                if (data && data.rates && data.rates.KRW && data.rates.JPY) {
+                    const krwRate = data.rates.KRW.toFixed(2);
+                    const jpyKrwRate = ((data.rates.KRW / data.rates.JPY) * 100).toFixed(2);
+                    currencyDiv.textContent = `USD/KRW: ${krwRate} | JPY(100)/KRW: ${jpyKrwRate}`;
+                } else {
+                    throw new Error("Invalid currency data format");
+                }
+            } catch (e) {
+                console.error("Currency fetch error:", e);
+                currencyDiv.textContent = "환율 정보 로드 실패";
+                currencyDiv.style.color = 'var(--color-tag-urgent)'; // 오류 시 색상 변경
+            }
+        }
+        
+        // (나머지 JS 코드: loadNews, renderClusters, 이벤트 리스너 등은 v4.3.1과 동일)
+        // ... (생략) ...
+
+    </script>
+</body>
+</html>
