@@ -1,6 +1,6 @@
 
 /*
- * EmarkNews — 업그레이드 백엔드 (v4.2: v4 기반 + 통합 안정성 패치: Vector Mutation, Invalid Time Value 수정, 초기화 강화)
+ * EmarkNews — 업그레이드 백엔드 (v4: API 중심 아키텍처, Naver API 통합, 불릿 포인트 요약, 안정성 강화)
  */
 
 "use strict";
@@ -122,16 +122,7 @@ if (newsApiKey) {
   console.warn("⚠️ NewsAPI key not found. NewsAPI features will be disabled.");
 }
 
-// Twitter API 클라이언트 설정 수정
-function setupTwitterClient() {
-  if (!TWITTER_BEARER_TOKEN) return null;
-  
-  // Bearer Token을 사용한 읽기 전용 클라이언트 설정
-  const client = new TwitterApi(TWITTER_BEARER_TOKEN);
-  return client.readOnly;
-}
-
-const twitterClient = setupTwitterClient();
+const twitterClient = TWITTER_BEARER_TOKEN ? new TwitterApi(TWITTER_BEARER_TOKEN) : null;
 if (twitterClient) console.log('✅ Twitter API initialized.');
 
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
@@ -343,15 +334,13 @@ function computeRating(cluster) {
   return Math.min(5.0, Math.max(1.0, rating));
 }
 
-// [v4.2 Patch] createEmptyCluster 수정: 시간 처리 안정화
 function createEmptyCluster(signature) {
   return {
     id: hashId(signature + ":" + Math.random().toString(36).slice(2,8)),
     signature,
     keywords: signature ? signature.split("|").filter(k => k) : [],
     articles: [],
-    // validTsCount 추가하여 평균 계산 안정성 확보
-    centroid: { titleTokens:new Map(), publishedAtAvg:0, validTsCount: 0 },
+    centroid: { titleTokens:new Map(), publishedAtAvg:0 },
     score: 0,
     labels: [],
     rating: 0,
@@ -359,28 +348,20 @@ function createEmptyCluster(signature) {
   };
 }
 
-// [v4.2 Patch] updateCentroid 수정: 시간 처리 안정화 (Invalid Time Value 해결)
 function updateCentroid(cluster, article) {
   const keys = extractKeywordsWithTFIDF([article.title || ""])[0].filter(k => k);
   for (const k of keys) {
     cluster.centroid.titleTokens.set(k, (cluster.centroid.titleTokens.get(k)||0)+1);
   }
-  
   const ts = article.publishedAt ? Date.parse(article.publishedAt) : NaN;
-
-  // 유효한 타임스탬프만 평균 계산에 포함
   if (Number.isFinite(ts)) {
-    const prevAvg = cluster.centroid.publishedAtAvg;
-    const validTsCount = cluster.centroid.validTsCount; 
-
-    if (!Number.isFinite(prevAvg) || validTsCount === 0) {
-        // 클러스터의 첫 번째 유효한 타임스탬프
+    const n = cluster.articles.length;
+    const prev = cluster.centroid.publishedAtAvg || ts;
+    // n이 0일 경우 (첫 기사) 처리
+    if (n === 0) {
         cluster.centroid.publishedAtAvg = ts;
-        cluster.centroid.validTsCount = 1;
     } else {
-        // 평균 업데이트
-        cluster.centroid.publishedAtAvg = (prevAvg * validTsCount + ts) / (validTsCount + 1);
-        cluster.centroid.validTsCount = validTsCount + 1;
+        cluster.centroid.publishedAtAvg = (prev * n + ts) / (n + 1);
     }
   }
 }
@@ -446,36 +427,25 @@ async function enrichCluster(cluster, lang) {
   cluster.isBuzz = cluster.articles.some(a => a.buzz > 0);
 }
 
-// [v4.2 Patch] 코사인 유사도 계산 함수: 데이터 변조(Mutation) 버그 수정
+// 코사인 유사도 계산 함수 (mathjs 사용)
 function cosineSimilarity(vecA, vecB) {
     try {
-        // Safety check 1: Ensure inputs are valid arrays and not empty
-        if (!Array.isArray(vecA) || !Array.isArray(vecB) || vecA.length === 0 || vecB.length === 0) {
-            return 0;
-        }
-
-        // Safety check 2: Ensure lengths match.
-        // 이전 버전의 데이터 변조(push(0)) 로직 제거됨. 아키텍처상 길이가 동일해야 함.
-        if (vecA.length !== vecB.length) {
-            console.warn(`Warning: Vector dimensions do not match (${vecA.length} vs ${vecB.length}). Returning 0.`);
-            return 0;
-        }
+        // 벡터 길이 확인 및 패딩 (필요시)
+        const maxLength = Math.max(vecA.length, vecB.length);
+        while (vecA.length < maxLength) vecA.push(0);
+        while (vecB.length < maxLength) vecB.push(0);
 
         const dot = math.dot(vecA, vecB);
         const normA = math.norm(vecA);
         const normB = math.norm(vecB);
-
-        // Safety check 3: Prevent division by zero
         if (normA === 0 || normB === 0) return 0;
-
         return dot / (normA * normB);
     } catch (e) {
+        // 계산 오류 발생 시 0 반환
         console.error("Cosine Similarity Error:", e.message);
         return 0;
     }
 }
-
-/* 번역 및 AI 처리 함수들 */
 
 async function clusterArticles(articles, lang, quality = "low") {
   if (!Array.isArray(articles) || !articles.length) return [];
@@ -711,17 +681,9 @@ async function computeUrgencyBuzz(articles) {
     if (twitterClient) {
         try {
             // X에서 '속보', '긴급', '주요 이슈' 관련 트윗 검색
-            const query = 'breaking news OR urgent OR major event -is:retweet lang:en';
-            
-            // Twitter API v2 명세에 맞는 올바른 파라미터 구성
-            const searchParams = {
-              'tweet.fields': 'created_at,author_id,public_metrics,text',
-              'max_results': 30
-            };
-            
-            console.log('Twitter 검색 파라미터:', { query, ...searchParams });
-            
-            const xBuzz = await twitterClient.v2.search(query, searchParams);
+            const query = 'breaking news OR urgent OR major event lang:en OR lang:ko OR lang:ja';
+            // 유료 API 사용 시 더 많은 결과를 가져올 수 있음 (max_results 조정)
+            const xBuzz = await twitterClient.v2.search(query, { max_results: 30 });
 
             if (xBuzz && xBuzz.data && xBuzz.data.data) {
                 xBuzz.data.data.forEach(tweet => {
@@ -732,10 +694,6 @@ async function computeUrgencyBuzz(articles) {
             }
         } catch (e) {
             console.error("❌ X API (Twitter) Error:", e.message);
-            // API 응답 오류인 경우 상세 정보 출력
-            if (e.data) {
-              console.error('상세 오류 정보:', JSON.stringify(e.data, null, 2));
-            }
             // API 호출 실패 시 (예: 요금제 제약, 인증 오류) Buzz 계산 생략
             buzzTopics = new Set();
         }
@@ -862,181 +820,166 @@ async function fetchFromRSS(urls, maxItemsPerFeed = 10, sourceLang = undefined) 
     return items;
 }
 
-/* API 호출 함수 */
-async function fetchFromApis(section, lang) {
-  const items = [];
-  
-  // NewsAPI 호출
-  if (newsApiKey) {
-    try {
-      const newsApiItems = await fetchFromNewsAPI(section, lang);
-      items.push(...newsApiItems);
-    } catch (e) {
-      console.warn("NewsAPI 호출 실패:", e.message);
-    }
-  }
-  
-  // Naver API 호출 (한국어인 경우)
-  if (lang === 'ko' && NAVER_CLIENT_ID && NAVER_CLIENT_SECRET) {
-    try {
-      const naverItems = await fetchFromNaverAPI(section === 'korea' ? '주요 뉴스' : section);
-      items.push(...naverItems);
-    } catch (e) {
-      console.warn("Naver API 호출 실패:", e.message);
-    }
-  }
-  
-  return items;
-}
-
-/* RSS 폴백 함수 */
-async function fetchFromRss(rssUrls) {
-  const items = [];
-  const parser = new RSSParser();
-  
-  for (const url of rssUrls) {
-    try {
-      const feed = await parser.parseURL(url);
-      const rssItems = feed.items.map(item => ({
-        title: item.title,
-        description: item.contentSnippet || item.summary,
-        url: item.link,
-        publishedAt: item.pubDate,
-        source: { name: feed.title || 'RSS Feed' },
-        urlToImage: item.enclosure?.url || null
-      }));
-      items.push(...rssItems);
-    } catch (e) {
-      console.warn(`RSS 파싱 실패 (${url}):`, e.message);
-    }
-  }
-  
-  return items;
-}
-
-/* 데이터 필터링 함수 */
-function filterItems(items, freshness = 48, domainCap = 50) {
-  if (!items || !Array.isArray(items)) return [];
-  
-  const now = new Date();
-  const freshnessMs = freshness * 60 * 60 * 1000; // 시간을 밀리초로 변환
-  
-  return items
-    .filter(item => {
-      // 시간 필터링
-      if (item.publishedAt) {
-        const publishedTime = new Date(item.publishedAt);
-        if (now - publishedTime > freshnessMs) return false;
-      }
-      
-      // 기본 필드 검증
-      return item.title && item.url;
-    })
-    .slice(0, domainCap); // 개수 제한
-}
-
 
 /* 섹션별 기사 수집 로직 (재설계) */
 async function fetchArticlesForSection(section, freshness, domainCap, lang) {
   let items = [];
-  
-  // RSS URLs 정의
-  const rssUrls = [
-    'https://feeds.cnn.com/rss/edition.rss',
-    'https://feeds.bbci.co.uk/news/rss.xml',
-    'https://www.ft.com/rss/home'
-  ];
-  
-  try {
-    items = await fetchFromApis(section, lang);  // NewsAPI/Naver/X 등 API 호출
-    if (items.length > 0) return filterItems(items, freshness, domainCap);  // 성공 시 반환
-  } catch (e) { console.error("API error:", e); }
-  
-  // RSS fallback
-  try {
-    items = await fetchFromRss(rssUrls);
-  } catch (e) { console.error("RSS fallback error:", e); }
-  
-  return filterItems(items, freshness, domainCap);  // 48시간 이내, 점수/태그 추가 로직
-}
 
-/* 기사 수집 함수들 */
-async function fetchFromNewsAPI(section, lang) {
-  if (!newsApiKey) return [];
-  
-  try {
-    const params = {
-      apiKey: newsApiKey,
-      pageSize: 20,
-      language: lang || 'en'
-    };
-    
-    // 섹션에 따른 파라미터 설정
-    if (section === 'world') {
-      params.category = 'general';
-    } else if (['business', 'technology', 'science', 'health', 'sports', 'entertainment'].includes(section)) {
-      params.category = section;
-    } else {
-      params.q = section;
-    }
-    
-    const response = await axios.get('https://newsapi.org/v2/top-headlines', { params });
-    return response.data.articles || [];
-  } catch (e) {
-    console.error('NewsAPI 오류:', e.message);
-    return [];
-  }
-}
+  console.log(`ℹ️ Fetching articles for section: ${section}`);
 
-async function fetchFromNaverAPI(query, limit = 20) {
-  if (!NAVER_CLIENT_ID || !NAVER_CLIENT_SECRET) return [];
-  
-  try {
-    const response = await axios.get('https://openapi.naver.com/v1/search/news.json', {
-      params: { query, display: limit, sort: 'date' },
-      headers: {
-        'X-Naver-Client-Id': NAVER_CLIENT_ID,
-        'X-Naver-Client-Secret': NAVER_CLIENT_SECRET
+  switch (section) {
+    case "world":
+      // 주력: NewsAPI (영어권 주요 국가)
+      items = await fetchFromNewsAPI({ language: 'en' });
+
+      // 보조: 주요 외신 RSS (BBC, Reuters 등)
+      const worldRss = [
+        "https://rss.cnn.com/rss/edition.rss",
+        "https://feeds.bbci.co.uk/news/world/rss.xml",
+        "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
+      ];
+      const rssItemsWorld = await fetchFromRSS(worldRss, 5, 'en');
+      items.push(...rssItemsWorld);
+      break;
+
+    case "kr":
+      // 주력: Naver API (NewsAPI 사용 금지 조건 반영)
+      items = await fetchFromNaverAPI("주요 뉴스");
+
+      // 보조: 국내 주요 언론사 RSS
+      const krRss = [
+        "https://rss.donga.com/total.xml",
+        "http://rss.joins.com/joins_news_list.xml",
+        "https://www.yonhapnewstv.co.kr/browse/feed/"
+      ];
+      const rssItemsKr = await fetchFromRSS(krRss, 5, 'ko');
+      items.push(...rssItemsKr);
+      break;
+
+    case "japan":
+      // 주력: NewsAPI (Country: jp, Language: ja)
+      items = await fetchFromNewsAPI({ country: 'jp', language: 'ja' });
+
+      // 보조: 일본 주요 언론사 RSS (Naver API 사용 금지 조건 반영)
+      const jpRss = [
+        "http://rss.asahi.com/rss/asahi/newsheadlines.rdf",
+        "http://www3.nhk.or.jp/rss/news/cat0.xml",
+        "https://www.japantimes.co.jp/feed/"
+      ];
+      const rssItemsJp = await fetchFromRSS(jpRss, 5, 'ja');
+      items.push(...rssItemsJp);
+      break;
+
+    case "buzz":
+      // 'Buzz' 섹션은 특정 소스보다는 화제성이 높은 기사를 모아야 합니다.
+      // 글로벌 및 주요 국가의 기사를 대량으로 수집한 후, 클러스터링 단계에서 Buzz 점수로 필터링합니다.
+      const buzzWorld = await fetchFromNewsAPI({ language: 'en', pageSize: 50, sortBy: 'popularity' });
+      const buzzKr = await fetchFromNaverAPI("실시간 인기 뉴스", 30);
+      const buzzJp = await fetchFromNewsAPI({ language: 'ja', country: 'jp', pageSize: 30, sortBy: 'popularity' });
+      items.push(...buzzWorld, ...buzzKr, ...buzzJp);
+      // 실제 필터링은 /feed 엔드포인트에서 처리
+      break;
+
+    case "youtube":
+      if (YOUTUBE_API_KEY) {
+        try {
+          const response = await axios.get('https://www.googleapis.com/youtube/v3/search', {
+            params: {
+              part: 'snippet',
+              q: 'breaking news live OR 속보',
+              type: 'video',
+              order: 'date',
+              maxResults: 15,
+              key: YOUTUBE_API_KEY
+            }
+          });
+          const youtubeItems = response.data.items.map(item => ({
+            title: item.snippet.title,
+            url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
+            publishedAt: item.snippet.publishedAt,
+            summary: item.snippet.description,
+            source: 'youtube.com',
+            sourceLang: 'en' // 기본값 영어로 설정
+          }));
+          items.push(...youtubeItems);
+        } catch (e) {
+          console.error('❌ YouTube API error:', e.message);
+        }
       }
+      break;
+
+    // Business, Tech 등 기타 유효한 NewsAPI 카테고리
+    default:
+      if (['business', 'technology', 'science', 'health', 'sports', 'entertainment', 'tech'].includes(section)) {
+        const category = section === 'tech' ? 'technology' : section;
+        // 기본적으로 영어 기사 수집
+        items = await fetchFromNewsAPI({ category: category, language: 'en' });
+      } else {
+        console.warn(`⚠️ Unknown or unhandled section: ${section}`);
+      }
+      break;
+  }
+
+  // 후처리 (시간 필터링, 도메인 캡, 중복 제거)
+  // 48시간 이내 기사만 허용 (요구사항 반영)
+  const effectiveFreshness = Math.min(freshness, 48);
+  const minTs = NOW() - effectiveFreshness * HOUR;
+
+  // 1. 시간 필터링
+  items = items.filter(item => {
+    if (!item.publishedAt) return false;
+    const ts = Date.parse(item.publishedAt);
+    return Number.isFinite(ts) && ts >= minTs;
+  });
+
+  // 2. 도메인 캡
+  if (domainCap > 0) {
+    const domainCount = {};
+    items = items.filter(item => {
+      const domain = getDomain(item.url);
+      if (!domain) return true; // 도메인 파싱 실패 시 유지
+      domainCount[domain] = (domainCount[domain] || 0) + 1;
+      return domainCount[domain] <= domainCap;
     });
-    
-    return response.data.items.map(item => ({
-      title: item.title.replace(/<[^>]*>/g, ''),
-      description: item.description.replace(/<[^>]*>/g, ''),
-      url: item.link,
-      publishedAt: item.pubDate,
-      source: { name: 'Naver News' }
-    }));
-  } catch (e) {
-    console.error('Naver API 오류:', e.message);
-    return [];
   }
+
+  // 3. 중복 제거 (URL 기준)
+  const uniqueItems = Array.from(new Map(items.map(item => [item.url, item])).values());
+
+  console.log(`ℹ️ Total unique articles fetched: ${uniqueItems.length}`);
+  return uniqueItems;
 }
 
-/* 뉴스 피드 생성 함수 */
-async function generateFeed(section, freshness, domainCap, lang, quality) {
+// 웹 스크래핑 함수 (기사 전문 추출용)
+async function safeFetchArticleContent(url) {
+  if (!url) return null;
   try {
-    // 1. 기사 수집
-    let items = await fetchArticlesForSection(section, freshness, domainCap, lang);
-    
-    if (items.length === 0) {
-      return { articles: [], clusters: [], meta: { total: 0, section, lang } };
+    const response = await axios.get(url, {
+        timeout: 8000,
+        headers: {
+            // 봇 차단 방지를 위한 User-Agent 설정
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
+        }
+    });
+    const $ = cheerio.load(response.data);
+
+    // 네이버 뉴스 본문 추출 로직 (특수 케이스)
+    if (getDomain(url) === 'naver.com') {
+        let content = $('#dic_area').text() || $('#articeBody').text() || $('article').text();
+        return content.trim().replace(/\s+/g, ' ').slice(0, 5000); // 공백 정규화 및 길이 제한
     }
-    
-    // 2. 기본 메타데이터 반환
-    return {
-      articles: items,
-      clusters: [],
-      meta: {
-        total: items.length,
-        section,
-        lang,
-        generated_at: new Date().toISOString()
-      }
-    };
+
+    // 일반적인 본문 추출 로직
+    $('script, style, nav, footer, aside, iframe, header, noscript').remove();
+    // 'article' 태그나 'body'에서 텍스트 추출
+    let content = $('article').text() || $('body').text();
+
+    // 과도한 공백 제거 및 길이 제한
+    return content.trim().replace(/\s+/g, ' ').slice(0, 5000);
+
   } catch (e) {
-    console.error('Feed 생성 오류:', e.message);
-    throw new Error('FEED_GENERATION_FAILED');
+    console.error(`❌ Safe fetch error for ${url}:`, e.message);
+    return null;
   }
 }
 
@@ -1053,49 +996,6 @@ app.get(/^(?!\/(api|feed|healthz?|_diag|translate_page)\/?).*$/, (req, res) => {
 });
 
 // 메인 피드 엔드포인트
-// API 라우트 추가 (프론트엔드 호환성)
-app.get("/api/news", cacheControl, async (req, res) => {
-  try {
-    // 기본 파라미터로 뉴스 피드 생성
-    const section = "world";
-    const freshness = 48;
-    const domainCap = 10;
-    const lang = "ko";
-    const quality = "low";
-    
-    // 내부적으로 feed 로직 재사용
-    req.query = { section, freshness, domainCap, lang, quality };
-    
-    // feed 엔드포인트와 동일한 로직 실행
-    const items = await fetchArticlesForSection(section, freshness, domainCap, lang);
-    
-    if (items.length > 0) {
-      const processedItems = await computeUrgencyBuzz(items);
-      const finalItems = await processArticles(processedItems, lang, {
-        aiSummary: true,
-        postEdit: false,
-        quality: quality
-      });
-      
-      // 프론트엔드에 맞는 간단한 형태로 변환
-      const newsData = finalItems.slice(0, 10).map(item => ({
-        title: item.translatedTitle || item.title,
-        description: item.translatedSummary || item.description || item.aiSummaryBullet,
-        publishedAt: item.publishedAt,
-        url: item.url,
-        source: item.source?.name || 'Unknown'
-      }));
-      
-      res.json(newsData);
-    } else {
-      res.json([]);
-    }
-  } catch (error) {
-    console.error('API News Error:', error);
-    res.status(500).json({ error: 'Failed to fetch news' });
-  }
-});
-
 app.get("/feed", cacheControl, async (req, res) => {
   try {
     const section = (req.query.section || "world").toString();
@@ -1256,7 +1156,7 @@ app.get("/healthz", (_req, res) => {
     env:NODE_ENV,
     uptime:process.uptime(),
     time:new Date().toISOString(),
-    version:"4.2.0" // 버전 업데이트
+    version:"4.0.0" // 버전 업데이트
   });
 });
 
@@ -1268,21 +1168,10 @@ app.use((err, req, res, next) => {
 
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
-app.listen(process.env.PORT || 3000, "0.0.0.0", () => console.log(`Server on ${process.env.PORT || 3000}`));
+  app.listen(PORT, '0.0.0.0', () => console.log(`🚀 [UPGRADED v4 FINAL] backend started on :${PORT}`));
 }
 
 module.exports = {
   app
   // 테스트용 export는 제거됨
 };
-process.on("unhandledRejection", (err) => console.error(err));
-process.on("uncaughtException", (err) => console.error(err));
-process.on("unhandledRejection", (err) => console.error("Unhandled Rejection:", err));
-process.on("uncaughtException", (err) => console.error("Uncaught Exception:", err));
-process.on("unhandledRejection", (err) => console.error("Unhandled Rejection:", err));
-process.on("uncaughtException", (err) => console.error("Uncaught Exception:", err));
-process.on("unhandledRejection", (err) => console.error(err));
-process.on("uncaughtException", (err) => console.error(err));
-process.on("unhandledRejection", (err) => console.error("Unhandled Rejection:", err));
-process.on("uncaughtException", (err) => console.error("Uncaught Exception:", err));
-process.on("warning", (warning) => { if (warning.name === "DeprecationWarning") console.warn("Ignored deprecation:", warning.message); });
