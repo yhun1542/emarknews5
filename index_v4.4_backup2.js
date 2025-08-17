@@ -1,5 +1,5 @@
 /*
- * EmarkNews — 업그레이드 백엔드 (v4.5.1: v4.4 기반 + cacheControl 누락 해결 최종 안정화 패치)
+ * EmarkNews — 업그레이드 백엔드 (v4.4: 정렬 로직, AI 프롬프트, 데이터 소스, UI 지원 강화)
  */
 
 "use strict";
@@ -1198,7 +1198,7 @@ app.get("/healthz", (_req, res) => {
     env:NODE_ENV,
     uptime:process.uptime(),
     time:new Date().toISOString(),
-    version:"4.5.1"
+    version:"4.3.0"
   });
 });
 
@@ -1211,7 +1211,7 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   // Railway 환경에서는 0.0.0.0으로 리스닝해야 함
-app.listen(process.env.PORT || 8080, "0.0.0.0", () => console.log(`✅ [UPGRADED v4.5.1] Server listening on :${process.env.PORT || 8080}`));
+app.listen(process.env.PORT || 8080, "0.0.0.0", () => console.log(`✅ [UPGRADED v4.3] Server listening on :${process.env.PORT || 8080}`));
 }
 
 module.exports = {
