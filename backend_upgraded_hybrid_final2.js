@@ -122,7 +122,16 @@ if (newsApiKey) {
   console.warn("⚠️ NewsAPI key not found. NewsAPI features will be disabled.");
 }
 
-const twitterClient = TWITTER_BEARER_TOKEN ? new TwitterApi(TWITTER_BEARER_TOKEN) : null;
+// Twitter API 클라이언트 설정 수정
+function setupTwitterClient() {
+  if (!TWITTER_BEARER_TOKEN) return null;
+  
+  // Bearer Token을 사용한 읽기 전용 클라이언트 설정
+  const client = new TwitterApi(TWITTER_BEARER_TOKEN);
+  return client.readOnly;
+}
+
+const twitterClient = setupTwitterClient();
 if (twitterClient) console.log('✅ Twitter API initialized.');
 
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
@@ -702,9 +711,17 @@ async function computeUrgencyBuzz(articles) {
     if (twitterClient) {
         try {
             // X에서 '속보', '긴급', '주요 이슈' 관련 트윗 검색
-            const query = 'breaking news OR urgent OR major event lang:en OR lang:ko OR lang:ja';
-            // 유료 API 사용 시 더 많은 결과를 가져올 수 있음 (max_results 조정)
-            const xBuzz = await twitterClient.v2.search(query, { max_results: 30 });
+            const query = 'breaking news OR urgent OR major event -is:retweet lang:en';
+            
+            // Twitter API v2 명세에 맞는 올바른 파라미터 구성
+            const searchParams = {
+              'tweet.fields': 'created_at,author_id,public_metrics,text',
+              'max_results': 30
+            };
+            
+            console.log('Twitter 검색 파라미터:', { query, ...searchParams });
+            
+            const xBuzz = await twitterClient.v2.search(query, searchParams);
 
             if (xBuzz && xBuzz.data && xBuzz.data.data) {
                 xBuzz.data.data.forEach(tweet => {
@@ -715,6 +732,10 @@ async function computeUrgencyBuzz(articles) {
             }
         } catch (e) {
             console.error("❌ X API (Twitter) Error:", e.message);
+            // API 응답 오류인 경우 상세 정보 출력
+            if (e.data) {
+              console.error('상세 오류 정보:', JSON.stringify(e.data, null, 2));
+            }
             // API 호출 실패 시 (예: 요금제 제약, 인증 오류) Buzz 계산 생략
             buzzTopics = new Set();
         }
