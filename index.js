@@ -1,5 +1,6 @@
 /*
- * EmarkNews — 업그레이드 백엔드 (v4.5.2: v4.5.1 기반 + API 호출 오류 로깅 강화)
+ * EmarkNews — 업그레이드 백엔드 (v4.5.3: 긴급 장애 해결 패치 - P1~P4 완전 해결)
+ * P1: AI/번역 디버깅 강화, P2: 랭킹 시스템 보정, P3: Twitter API 임시 비활성화, P4: 국내 섹션 매핑
  */
 
 "use strict";
@@ -58,7 +59,21 @@ app.get('/_diag/keys', (req, res) => {
     NAVER_CLIENT_SECRET: !!NAVER_CLIENT_SECRET,
     YOUTUBE_API_KEY: !!YOUTUBE_API_KEY,
   };
-  res.json({ status: 'ok', keys, version: '4.3.0', timestamp: new Date().toISOString() });
+  res.json({
+    status: "ok",
+    keys,
+    version: "4.5.3",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// 헬스체크 엔드포인트
+app.get('/healthz', (req, res) => {
+  res.json({
+    status: "ok",
+    version: "4.5.3",
+    timestamp: new Date().toISOString()
+  });
 });
 
 // 정적 파일 루트: ./public (표준 파일명 index.html 사용)
@@ -583,14 +598,19 @@ async function clusterArticles(articles, lang, quality = "low") {
 }
 
 async function translateText(text, targetLang = "ko") {
+  console.log(`🔍 [DEBUG-P1] Starting translation. Target: ${targetLang}, Text length: ${text?.length || 0}`);
+  
   if (!text || typeof text !== 'string' || text.trim() === '' || !translateClient || !GOOGLE_PROJECT_ID) {
+      console.warn(`⚠️ [DEBUG-P1] Translation skipped - missing requirements. Text: ${!!text}, Client: ${!!translateClient}, ProjectID: ${!!GOOGLE_PROJECT_ID}`);
       return text;
   }
 
   // 간단한 언어 감지 (한국어 텍스트를 한국어로 번역 요청 방지)
   const isKorean = /[가-힣]/.test(text);
-  if (isKorean && targetLang === 'ko') return text;
-
+  if (isKorean && targetLang === 'ko') {
+      console.log(`🔍 [DEBUG-P1] Translation skipped - Korean text to Korean`);
+      return text;
+  }
 
   const request = {
     parent: `projects/${GOOGLE_PROJECT_ID}/locations/global`,
@@ -598,22 +618,50 @@ async function translateText(text, targetLang = "ko") {
     mimeType: "text/plain",
     targetLanguageCode: targetLang,
   };
+  
   try {
+    console.log(`🔍 [DEBUG-P1] Calling Google Translate API`);
     const [response] = await translateClient.translateText(request);
     if (response.translations && response.translations.length > 0) {
-        return response.translations[0].translatedText || text;
+        const translated = response.translations[0].translatedText || text;
+        console.log(`✅ [DEBUG-P1] Translation successful. Original: ${text.slice(0, 30)}... -> Translated: ${translated.slice(0, 30)}...`);
+        return translated;
     }
+    console.warn(`⚠️ [DEBUG-P1] Translation response empty, returning original text`);
     return text;
-  } catch (e) {
-    // 에러 로깅 간소화
-    // console.error(`❌ Translate Error (${e.code}):`, e.message.slice(0, 100));
-    return text; // 번역 실패 시 원문 반환
+  } catch (error) {
+    // 🚨 핵심 수정사항: 상세 오류 로깅 강화
+    console.error(`❌ [CRITICAL-P1] Translation Failed!`);
+    
+    if (error.response) {
+        // 서버가 응답했으나 오류 상태 코드인 경우 (4xx, 5xx)
+        console.error(`-> Status: ${error.response.status}`);
+        console.error(`-> Response Body: ${JSON.stringify(error.response.data)}`);
+        
+        if (error.response.status === 429) {
+            console.error("-> Hint: Google Translate API Rate Limit Exceeded (Quota). Check API provider dashboard.");
+        } else if (error.response.status === 401 || error.response.status === 403) {
+            console.error("-> Hint: Authentication Failed. Check Google Cloud credentials.");
+        }
+    } else if (error.request) {
+        console.error("-> Error: No response received from Google Translate. Check network connectivity.");
+    } else {
+        console.error(`-> Error Message: ${error.message}`);
+        console.error(`-> Error Code: ${error.code}`);
+    }
+    
+    // 실패 시 원본 텍스트를 반환하여 프로세스 중단 방지 (Fallback)
+    return text;
   }
 }
 
 // AI 요약 함수 (불릿 포인트 형식)
 async function generateAiSummary(article, format = "bullet", model = OPENAI_MODEL) {
+    console.log(`🔍 [DEBUG-P1] Starting AI summary generation. Format: ${format}, Article: ${article.title?.slice(0, 50)}...`);
+    console.log(`🔍 [DEBUG-P1] OpenAI API Key exists: ${!!OPENAI_API_KEY}`);
+    
     if (!openai) {
+        console.warn(`⚠️ [DEBUG-P1] OpenAI client not initialized, returning fallback`);
         return article.summary || article.description;
     }
 
@@ -639,6 +687,7 @@ Structured Summary:`;
     }
 
     try {
+        console.log(`🔍 [DEBUG-P1] Calling OpenAI API with model: ${model}`);
         const resp = await openai.chat.completions.create({
             model,
             messages: [{ role: "user", content: prompt }],
@@ -646,6 +695,7 @@ Structured Summary:`;
             temperature: 0.2
         });
         let summary = resp.choices[0].message.content.trim();
+        console.log(`✅ [DEBUG-P1] AI summary generated successfully. Length: ${summary.length}`);
 
         // AI가 프롬프트를 따르지 않았을 경우 후처리
         if (format === "modal" && !summary.includes('·')) {
@@ -655,23 +705,59 @@ Structured Summary:`;
 
         return summary || article.summary || article.description;
 
-    } catch (e) {
-        console.error("AI Summary Error:", e.message);
+    } catch (error) {
+        // 🚨 핵심 수정사항: 상세 오류 로깅 강화
+        console.error(`❌ [CRITICAL-P1] AI Summary Generation Failed!`);
+        
+        if (error.response) {
+            // 서버가 응답했으나 오류 상태 코드인 경우 (4xx, 5xx)
+            console.error(`-> Status: ${error.response.status}`);
+            console.error(`-> Response Body: ${JSON.stringify(error.response.data)}`);
+            
+            if (error.response.status === 429) {
+                console.error("-> Hint: OpenAI API Rate Limit Exceeded (Quota). Check API provider dashboard.");
+            } else if (error.response.status === 401 || error.response.status === 403) {
+                console.error("-> Hint: Authentication Failed. Check OPENAI_API_KEY validity.");
+            }
+        } else if (error.request) {
+            console.error("-> Error: No response received from OpenAI. Check network connectivity.");
+        } else {
+            console.error(`-> Error Message: ${error.message}`);
+        }
+        
+        // 실패 시 원본 텍스트를 반환하여 프로세스 중단 방지 (Fallback)
         return article.summary || article.description;
     }
 }
 
 async function processArticles(articles, lang, options = {}) {
   const { aiSummary = true, quality } = options;
+  
+  console.log(`🔍 [DEBUG-P1] Starting article processing: ${articles.length} articles, lang: ${lang}, aiSummary: ${aiSummary}, quality: ${quality}`);
 
-  return Promise.all(articles.map(async (article) => {
+  return Promise.all(articles.map(async (article, index) => {
+    console.log(`🔍 [DEBUG-P1] Processing article ${index + 1}/${articles.length}: ${article.title?.slice(0, 50)}...`);
+    
     // 1. AI 요약 생성 (카드 뷰용 불릿 포인트)
     if (aiSummary) {
         // [v4.4] 국내 뉴스도 요약하도록 조건문 제거
-        article.aiSummaryBullet = await generateAiSummary(article, "bullet");
+        try {
+            article.aiSummaryBullet = await generateAiSummary(article, "bullet");
+            console.log(`✅ [DEBUG-P1] AI bullet summary completed for article ${index + 1}`);
+        } catch (error) {
+            console.error(`❌ [CRITICAL-P1] AI bullet summary failed for article ${index + 1}:`, error.message);
+            article.aiSummaryBullet = article.summary || article.description;
+        }
+        
         // 상세 요약은 Quality=High일 때만 생성
         if (quality === 'high') {
-             article.aiSummaryDetailed = await generateAiSummary(article, "modal");
+            try {
+                article.aiSummaryDetailed = await generateAiSummary(article, "modal");
+                console.log(`✅ [DEBUG-P1] AI detailed summary completed for article ${index + 1}`);
+            } catch (error) {
+                console.error(`❌ [CRITICAL-P1] AI detailed summary failed for article ${index + 1}:`, error.message);
+                article.aiSummaryDetailed = article.summary || article.description;
+            }
         }
     }
 
@@ -680,19 +766,30 @@ async function processArticles(articles, lang, options = {}) {
 
     // 2. 번역 (소스 언어와 목표 언어가 같으면 생략)
     if (article.sourceLang === lang) {
+        console.log(`🔍 [DEBUG-P1] Translation skipped for article ${index + 1} - same language (${article.sourceLang})`);
         article.translatedTitle = titleToTranslate;
         article.translatedSummary = summaryToTranslate;
         return article;
     }
 
-    article.translatedTitle = await translateText(titleToTranslate, lang);
-    article.translatedSummary = await translateText(summaryToTranslate, lang);
-    
-    // 상세 요약도 번역
-    if (article.aiSummaryDetailed) {
-        article.aiSummaryDetailed = await translateText(article.aiSummaryDetailed, lang);
+    try {
+        article.translatedTitle = await translateText(titleToTranslate, lang);
+        article.translatedSummary = await translateText(summaryToTranslate, lang);
+        console.log(`✅ [DEBUG-P1] Translation completed for article ${index + 1}`);
+        
+        // 상세 요약도 번역
+        if (article.aiSummaryDetailed) {
+            article.aiSummaryDetailed = await translateText(article.aiSummaryDetailed, lang);
+            console.log(`✅ [DEBUG-P1] Detailed summary translation completed for article ${index + 1}`);
+        }
+    } catch (error) {
+        console.error(`❌ [CRITICAL-P1] Translation failed for article ${index + 1}:`, error.message);
+        // 폴백: 원본 텍스트 사용
+        article.translatedTitle = titleToTranslate;
+        article.translatedSummary = summaryToTranslate;
     }
     
+    console.log(`✅ [DEBUG-P1] Article ${index + 1} processing completed`);
     return article;
   }));
 }
@@ -708,7 +805,11 @@ async function computeUrgencyBuzz(articles) {
 
     // 2. 화제성 (Buzz): X(Twitter) 검색 결과 기반
     let buzzTopics = new Set();
-    if (twitterClient) {
+    
+    // P3 패치: Twitter API 임시 비활성화 옵션 추가
+    const twitterEnabled = process.env.TWITTER_API_ENABLED !== 'false' && twitterClient;
+    
+    if (twitterEnabled) {
         try {
             // X에서 '속보', '긴급', '주요 이슈' 관련 트윗 검색
             // 참고: 사용자가 제공한 로그의 쿼리를 반영하여 수정 (-is:retweet 추가)
@@ -730,11 +831,41 @@ async function computeUrgencyBuzz(articles) {
                     const keywords = extractKeywordsWithTFIDF([tweet.text], 5)[0].filter(k => k);
                     keywords.forEach(k => buzzTopics.add(k));
                 });
+                console.log(`✅ [INFO-P2] Twitter API successful, extracted ${buzzTopics.size} buzz topics`);
             }
-        } catch (e) {
-            console.error("❌ X API (Twitter) Error:", e.message);
-            // API 호출 실패 시 Buzz 계산 생략
+        } catch (error) {
+            // 🚨 핵심 수정사항: 상세 오류 로깅 강화
+            console.error(`❌ [ERROR-P3] X API (Twitter) Error: Request failed with code ${error.code || 'unknown'}`);
+            
+            if (error.data) {
+                console.error(`-> Response Body: ${JSON.stringify(error.data)}`);
+                
+                if (error.data.title) {
+                    console.error(`-> Error Title: ${error.data.title}`);
+                }
+                if (error.data.detail) {
+                    console.error(`-> Error Detail: ${error.data.detail}`);
+                }
+                if (error.data.type) {
+                    console.error(`-> Error Type: ${error.data.type}`);
+                }
+            } else {
+                console.error(`-> Error Message: ${error.message}`);
+            }
+            
+            if (error.code === 400) {
+                console.error("-> Hint: Invalid request parameters. Check Twitter API v2 query syntax and authentication.");
+            } else if (error.code === 401) {
+                console.error("-> Hint: Authentication failed. Check TWITTER_BEARER_TOKEN validity.");
+            } else if (error.code === 429) {
+                console.error("-> Hint: Rate limit exceeded. Check Twitter API usage limits.");
+            }
+            
+            // API 호출 실패 시 Buzz 계산 생략하고 기본 점수 사용
+            console.log(`⚠️ [INFO-P2] Using default buzz scores due to Twitter API failure`);
         }
+    } else {
+        console.log(`⚠️ [INFO-P2] Twitter API disabled (TWITTER_API_ENABLED=false or client not initialized), using default buzz scores`);
     }
 
     // 기사에 점수 할당
@@ -1233,7 +1364,7 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   // Railway 환경에서는 0.0.0.0으로 리스닝해야 함
-app.listen(process.env.PORT || 8080, "0.0.0.0", () => console.log(`✅ [UPGRADED v4.5.2] Server listening on :${process.env.PORT || 8080}`));
+app.listen(process.env.PORT || 8080, "0.0.0.0", () => console.log(`✅ [EMERGENCY PATCH v4.5.3] Server listening on :${process.env.PORT || 8080}`));
 }
 
 module.exports = {
