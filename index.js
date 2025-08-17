@@ -1,6 +1,8 @@
 /*
- * EmarkNews — 업그레이드 백엔드 (v4.5.3: 긴급 장애 해결 패치 - P1~P4 완전 해결)
- * P1: AI/번역 디버깅 강화, P2: 랭킹 시스템 보정, P3: Twitter API 임시 비활성화, P4: 국내 섹션 매핑
+ * EmarkNews — 업그레이드 백엔드 (v4.6.0: 복원력 강화 패치 - Google 번역 인증 완전 수정)
+ * 1.1: Google 번역 인증 수정 및 폴백 추가 (GOOGLE_APPLICATION_CREDENTIALS_JSON 지원)
+ * 1.2: 주요 기사 처리 파이프라인 강화 (복원력 있는 번역 함수 사용)
+ * 1.3: 사소한 수정 적용 (한국 뉴스 수정, 트위터 API 비활성화)
  */
 
 "use strict";
@@ -62,7 +64,7 @@ app.get('/_diag/keys', (req, res) => {
   res.json({
     status: "ok",
     keys,
-    version: "4.5.3",
+    version: "4.6.0",
     timestamp: new Date().toISOString()
   });
 });
@@ -71,7 +73,7 @@ app.get('/_diag/keys', (req, res) => {
 app.get('/healthz', (req, res) => {
   res.json({
     status: "ok",
-    version: "4.5.3",
+    version: "4.6.0",
     timestamp: new Date().toISOString()
   });
 });
@@ -140,34 +142,49 @@ if (twitterClient) console.log('✅ Twitter API initialized.');
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 if (openai) console.log('✅ OpenAI initialized.');
 
-// Google Translate Client 초기화
-const GCLOUD_SA_KEY = TRANSLATE_API_KEY || googleCredentialsPath;
-let translateClientOptions = {};
+// Google Translate Client 초기화 (v4.6.0: 복원력 강화)
 let translateClient = null;
 
-if (GOOGLE_PROJECT_ID) {
+// 새 환경 변수로부터 클라이언트 초기화 시도
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
     try {
-        if (GCLOUD_SA_KEY && typeof GCLOUD_SA_KEY === 'string') {
-             if (GCLOUD_SA_KEY.startsWith('{') && !googleCredentialsPath) {
-                 // 파일 쓰기에 실패했지만 환경 변수에 JSON 값이 있는 경우 (메모리에서 직접 사용)
-                 const credentials = JSON.parse(GCLOUD_SA_KEY.replace(/\\n/g, "\n"));
-                 translateClientOptions = { credentials };
-             } else if (googleCredentialsPath) {
-                 // 파일 경로 사용
-                 translateClientOptions = { keyFilename: googleCredentialsPath };
-             }
+        const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
+        translateClient = new TranslationServiceClient({ credentials });
+        console.log('✅ [INFO-P1] 환경 변수로부터 Google 번역 클라이언트를 성공적으로 초기화했습니다.');
+    } catch (error) {
+        console.error('❌ [CRITICAL-P1] GOOGLE_APPLICATION_CREDENTIALS_JSON 파싱에 실패했습니다. 유효한 한 줄의 JSON 문자열인지 확인하세요. 번역이 비활성화됩니다.', error);
+        translateClient = null; // 파싱 실패 시 클라이언트 비활성화
+    }
+} else {
+    // 기존 방식 폴백 시도
+    const GCLOUD_SA_KEY = TRANSLATE_API_KEY || googleCredentialsPath;
+    let translateClientOptions = {};
+
+    if (GOOGLE_PROJECT_ID) {
+        try {
+            if (GCLOUD_SA_KEY && typeof GCLOUD_SA_KEY === 'string') {
+                 if (GCLOUD_SA_KEY.startsWith('{') && !googleCredentialsPath) {
+                     // 파일 쓰기에 실패했지만 환경 변수에 JSON 값이 있는 경우 (메모리에서 직접 사용)
+                     const credentials = JSON.parse(GCLOUD_SA_KEY.replace(/\\n/g, "\n"));
+                     translateClientOptions = { credentials };
+                 } else if (googleCredentialsPath) {
+                     // 파일 경로 사용
+                     translateClientOptions = { keyFilename: googleCredentialsPath };
+                 }
+            }
+            
+            if (Object.keys(translateClientOptions).length > 0 || (googleCredentialsPath && fs.existsSync(googleCredentialsPath))) {
+                translateClient = new TranslationServiceClient(translateClientOptions);
+                console.log('✅ Google Translate Client initialized (fallback method).');
+            } else {
+                console.warn('⚠️ [WARN-P1] GOOGLE_APPLICATION_CREDENTIALS_JSON을 찾을 수 없습니다. 번역이 비활성화됩니다.');
+                translateClient = null; // 변수가 설정되지 않았을 때 클라이언트 비활성화
+            }
+            
+        } catch (e) {
+            console.error('❌ Google Translate initialization error:', e.message);
+            translateClient = null;
         }
-        
-        if (Object.keys(translateClientOptions).length > 0 || (googleCredentialsPath && fs.existsSync(googleCredentialsPath))) {
-            translateClient = new TranslationServiceClient(translateClientOptions);
-            console.log('✅ Google Translate Client initialized.');
-        } else {
-            console.warn('⚠️ Google Translate Client could not be initialized (missing valid credentials).');
-        }
-        
-    } catch (e) {
-        console.error('❌ Google Translate initialization error:', e.message);
-        translateClient = null;
     }
 }
 
@@ -597,11 +614,19 @@ async function clusterArticles(articles, lang, quality = "low") {
   }));
 }
 
+/**
+ * 텍스트를 대상 언어로 번역합니다.
+ * 어떤 이유로든 번역이 실패하면 오류를 기록하고 원본 텍스트를 반환합니다.
+ * @param {string} text 번역할 텍스트.
+ * @param {string} targetLang 대상 언어 코드 (예: 'ko').
+ * @returns {Promise<string>} 번역된 텍스트 또는 폴백으로 사용될 원본 텍스트.
+ */
 async function translateText(text, targetLang = "ko") {
   console.log(`🔍 [DEBUG-P1] Starting translation. Target: ${targetLang}, Text length: ${text?.length || 0}`);
   
-  if (!text || typeof text !== 'string' || text.trim() === '' || !translateClient || !GOOGLE_PROJECT_ID) {
-      console.warn(`⚠️ [DEBUG-P1] Translation skipped - missing requirements. Text: ${!!text}, Client: ${!!translateClient}, ProjectID: ${!!GOOGLE_PROJECT_ID}`);
+  // 클라이언트가 초기화되지 않았거나 텍스트가 없으면 즉시 폴백합니다.
+  if (!translateClient || !text) {
+      console.warn(`⚠️ [DEBUG-P1] Translation skipped - missing requirements. Text: ${!!text}, Client: ${!!translateClient}`);
       return text;
   }
 
@@ -630,8 +655,7 @@ async function translateText(text, targetLang = "ko") {
     console.warn(`⚠️ [DEBUG-P1] Translation response empty, returning original text`);
     return text;
   } catch (error) {
-    // 🚨 핵심 수정사항: 상세 오류 로깅 강화
-    console.error(`❌ [CRITICAL-P1] Translation Failed!`);
+    console.error(`❌ [CRITICAL-P1] 텍스트 덩어리에 대한 Google 번역 API 호출 실패. 원본 텍스트를 반환합니다. 오류: ${error.message}`);
     
     if (error.response) {
         // 서버가 응답했으나 오류 상태 코드인 경우 (4xx, 5xx)
@@ -639,18 +663,17 @@ async function translateText(text, targetLang = "ko") {
         console.error(`-> Response Body: ${JSON.stringify(error.response.data)}`);
         
         if (error.response.status === 429) {
-            console.error("-> Hint: Google Translate API Rate Limit Exceeded (Quota). Check API provider dashboard.");
+            console.error("-> Hint: API Rate Limit Exceeded (Quota). Check API provider dashboard.");
         } else if (error.response.status === 401 || error.response.status === 403) {
-            console.error("-> Hint: Authentication Failed. Check Google Cloud credentials.");
+            console.error("-> Hint: Authentication Failed. Check API Key validity.");
         }
     } else if (error.request) {
-        console.error("-> Error: No response received from Google Translate. Check network connectivity.");
+        console.error("-> Error: No response received. Check network connectivity.");
     } else {
         console.error(`-> Error Message: ${error.message}`);
-        console.error(`-> Error Code: ${error.code}`);
     }
-    
-    // 실패 시 원본 텍스트를 반환하여 프로세스 중단 방지 (Fallback)
+
+    // 중요 폴백: API 호출 실패 시 원본 텍스트를 반환합니다.
     return text;
   }
 }
@@ -738,59 +761,66 @@ async function processArticles(articles, lang, options = {}) {
   return Promise.all(articles.map(async (article, index) => {
     console.log(`🔍 [DEBUG-P1] Processing article ${index + 1}/${articles.length}: ${article.title?.slice(0, 50)}...`);
     
+    // 모든 키가 존재하도록 기본 객체를 사용합니다
+    const processedArticle = {
+        ...article,
+        title: article.title || '',
+        summary: article.description || article.summary || '', // 안전한 폴백으로 시작
+        translatedTitle: '',
+        translatedSummary: '',
+        score: 0,
+        buzz: 0
+    };
+
     // 1. AI 요약 생성 (카드 뷰용 불릿 포인트)
     if (aiSummary) {
-        // [v4.4] 국내 뉴스도 요약하도록 조건문 제거
         try {
-            article.aiSummaryBullet = await generateAiSummary(article, "bullet");
+            console.log(`🔍 [DEBUG-P1] Starting AI summary generation for article ${index + 1}`);
+            processedArticle.aiSummaryBullet = await generateAiSummary(processedArticle, "bullet");
             console.log(`✅ [DEBUG-P1] AI bullet summary completed for article ${index + 1}`);
         } catch (error) {
             console.error(`❌ [CRITICAL-P1] AI bullet summary failed for article ${index + 1}:`, error.message);
-            article.aiSummaryBullet = article.summary || article.description;
+            processedArticle.aiSummaryBullet = processedArticle.summary || processedArticle.description;
         }
         
         // 상세 요약은 Quality=High일 때만 생성
         if (quality === 'high') {
             try {
-                article.aiSummaryDetailed = await generateAiSummary(article, "modal");
+                processedArticle.aiSummaryDetailed = await generateAiSummary(processedArticle, "modal");
                 console.log(`✅ [DEBUG-P1] AI detailed summary completed for article ${index + 1}`);
             } catch (error) {
                 console.error(`❌ [CRITICAL-P1] AI detailed summary failed for article ${index + 1}:`, error.message);
-                article.aiSummaryDetailed = article.summary || article.description;
+                processedArticle.aiSummaryDetailed = processedArticle.summary || processedArticle.description;
             }
         }
     }
 
-    const titleToTranslate = article.title;
-    const summaryToTranslate = article.aiSummaryBullet || article.summary || article.description;
+    const titleToTranslate = processedArticle.title;
+    const summaryToTranslate = processedArticle.aiSummaryBullet || processedArticle.summary || processedArticle.description;
 
-    // 2. 번역 (소스 언어와 목표 언어가 같으면 생략)
-    if (article.sourceLang === lang) {
-        console.log(`🔍 [DEBUG-P1] Translation skipped for article ${index + 1} - same language (${article.sourceLang})`);
-        article.translatedTitle = titleToTranslate;
-        article.translatedSummary = summaryToTranslate;
-        return article;
-    }
-
-    try {
-        article.translatedTitle = await translateText(titleToTranslate, lang);
-        article.translatedSummary = await translateText(summaryToTranslate, lang);
+    // 2. 복원력 있는 번역
+    // 이 함수는 더 이상 오류를 발생시키지 않습니다. 실패 시 원본 텍스트를 반환합니다.
+    if (processedArticle.sourceLang === lang) {
+        console.log(`🔍 [DEBUG-P1] Translation skipped for article ${index + 1} - same language (${processedArticle.sourceLang})`);
+        processedArticle.translatedTitle = titleToTranslate;
+        processedArticle.translatedSummary = summaryToTranslate;
+    } else {
+        const [translatedTitle, translatedSummary] = await Promise.all([
+            translateText(titleToTranslate, lang),
+            translateText(summaryToTranslate, lang)
+        ]);
+        processedArticle.translatedTitle = translatedTitle;
+        processedArticle.translatedSummary = translatedSummary;
         console.log(`✅ [DEBUG-P1] Translation completed for article ${index + 1}`);
         
-        // 상세 요약도 번역
-        if (article.aiSummaryDetailed) {
-            article.aiSummaryDetailed = await translateText(article.aiSummaryDetailed, lang);
-            console.log(`✅ [DEBUG-P1] Detailed summary translation completed for article ${index + 1}`);
+        // 상세 요약도 번역 (Quality=High일 때만)
+        if (quality === 'high' && processedArticle.aiSummaryDetailed) {
+            processedArticle.aiSummaryDetailed = await translateText(processedArticle.aiSummaryDetailed, lang);
         }
-    } catch (error) {
-        console.error(`❌ [CRITICAL-P1] Translation failed for article ${index + 1}:`, error.message);
-        // 폴백: 원본 텍스트 사용
-        article.translatedTitle = titleToTranslate;
-        article.translatedSummary = summaryToTranslate;
     }
-    
+
     console.log(`✅ [DEBUG-P1] Article ${index + 1} processing completed`);
-    return article;
+    return processedArticle;
   }));
 }
 
@@ -1364,7 +1394,7 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   // Railway 환경에서는 0.0.0.0으로 리스닝해야 함
-app.listen(process.env.PORT || 8080, "0.0.0.0", () => console.log(`✅ [EMERGENCY PATCH v4.5.3] Server listening on :${process.env.PORT || 8080}`));
+app.listen(process.env.PORT || 8080, "0.0.0.0", () => console.log(`✅ [RESILIENCE PATCH v4.6.0] Server listening on :${process.env.PORT || 8080}`));
 }
 
 module.exports = {
