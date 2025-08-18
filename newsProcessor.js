@@ -162,7 +162,7 @@ function freshnessWeight(publishedAt) {
 
   // 주말(토, 일)에는 시간 감쇠를 완화하여 기사가 더 오래 높은 점수를 유지하도록 함
   const isWeekend = (currentDay === 0 || currentDay === 6);
-  const TIME_DECAY_TAU_HOURS = isWeekend ? 120 : 72; // 주말: 120시간(5일), 주중: 72시간(3일)
+  const TIME_DECAY_TAU_HOURS = isWeekend ? 144 : 96; // 주말: 144시간(6일), 주중: 96시간(4일)
 
   const hours = (now.getTime() - ts) / (1000 * 60 * 60);
   const w = Math.exp(-Math.max(0, hours) / TIME_DECAY_TAU_HOURS);
@@ -247,12 +247,16 @@ const calculateScore = (article) => {
     const buzz = article.buzzScore || 0;
     const sourceReputation = article.source?.reputationScore || 0;
 
-    const weights = { freshness: 0.5, buzz: 0.3, source: 0.2 };
+    // 개선된 가중치: 최신성 감소, 품질 증가
+    const weights = { freshness: 0.3, buzz: 0.35, source: 0.35 };
 
     const finalScore = freshness * weights.freshness + buzz * weights.buzz + sourceReputation * weights.source;
 
+    // 점수 상한 확장 (1.5 → 2.0)
+    const cappedScore = Math.min(finalScore, 100);
+
     return {
-      finalScore: Math.round(finalScore),
+      finalScore: Math.round(cappedScore),
       breakdown: {
         freshness: Math.round(freshness * weights.freshness),
         buzz: Math.round(buzz * weights.buzz),

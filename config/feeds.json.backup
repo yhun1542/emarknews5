@@ -10,10 +10,8 @@
     { "name": "MarketWatch", "url": "http://feeds.marketwatch.com/marketwatch/topstories/" }
   ],
   "korea": [
-    { "name": "Yonhap News Korea", "url": "https://www.yonhapnewstv.co.kr/browse/feed/politics/" },
-    { "name": "Korea Herald Domestic", "url": "http://www.koreaherald.com/rss/020100000000.xml" },
-    { "name": "Chosun Ilbo", "url": "https://www.chosun.com/arc/outboundfeeds/rss/" },
-    { "name": "JoongAng Daily", "url": "https://koreajoongangdaily.joins.com/rss/allArticle.xml" }
+    { "name": "Yonhap News Agency", "url": "https://www.yonhapnewstv.co.kr/browse/feed/" },
+    { "name": "Korea Herald", "url": "http://www.koreaherald.com/rss/020000000000.xml" }
   ],
   "japan": [
     { "name": "Japan Times", "url": "https://www.japantimes.co.jp/feed/" },
