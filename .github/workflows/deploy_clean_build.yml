@@ -1,0 +1,56 @@
+name: Deploy to Railway (Clean Build)
+
+on:
+  push:
+    branches: [ main ]   # 필요 시 변경
+  workflow_dispatch:      # 수동 실행도 허용
+
+concurrency:
+  group: railway-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_NAME: emarknews5
+  SERVICE_NAME: emarknews5
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+
+      - name: Railway login
+        run: railway login --token "${{ secrets.RAILWAY_TOKEN }}"
+
+      - name: Link project/service
+        run: |
+          railway link --project "${PROJECT_NAME}"
+          railway link --service "${SERVICE_NAME}"
+
+      # ✅ 캐시 무효화: 캐시버스트 변수는 매 실행 시 갱신
+      - name: Bust build cache
+        run: |
+          BUST="ts-$(date +%s)-${{ github.sha }}"
+          echo "CACHE_BUST=$BUST"
+          railway variables set CACHE_BUST="$BUST"
+
+      # (선택) Node 빌드 선행이 필요한 프레임워크면 주석 해제
+      # - name: Install deps (optional)
+      #   run: npm ci
+      # - name: Build (optional)
+      #   run: npm run build
+
+      - name: Deploy to Railway (clean build)
+        run: railway up --service "${SERVICE_NAME}" --ci
+
+      # 실패 시 최근 로그를 수집해 디버깅에 도움
+      - name: Collect recent logs on failure
+        if: failure()
+        run: |
+          railway logs --service "${SERVICE_NAME}" --lines 500 > railway_failed_logs.txt || true
+          echo "Saved logs to railway_failed_logs.txt"
+
