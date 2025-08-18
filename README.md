@@ -31,4 +31,4 @@ Frontend: index_gemini_grok_final.html (static, can be served separately or inte
 
 - /feed: Get news feed.
 - /translate_page: Translate page content.
-- /healthz: Health check.
+- /healthz: Health check.# GitHub Actions Test - Sun Aug 17 21:55:02 EDT 2025
